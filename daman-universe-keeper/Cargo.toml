@@ -1,0 +1,23 @@
+[package]
+name = "daman-universe-keeper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman universe-keeper: polls the universe-screening source JSON on a configurable cadence, computes the diff against the last seen snapshot, and emits chi:universe-rebalance carrying the add/remove deltas. The bridge translates the rebalance chi into addAsset/removeAsset on the UniverseRegistry. The whitelist is not admin-curated; it is rebalance-driven."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true }
+
+[[bin]]
+name = "daman-universe-keeper"
+path = "src/main.rs"

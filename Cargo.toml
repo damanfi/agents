@@ -1,6 +1,14 @@
 [workspace]
 resolver = "2"
-members = ["daman-watchdog", "daman-arbiter", "daman-farcaster-poster", "daman-recruiter"]
+members = [
+    "daman-watchdog",
+    "daman-arbiter",
+    "daman-farcaster-poster",
+    "daman-recruiter",
+    "daman-chain-reader",
+    "daman-trace-pinner",
+    "daman-universe-keeper",
+]
 
 [workspace.package]
 version = "0.1.0"

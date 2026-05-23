@@ -1,0 +1,23 @@
+[package]
+name = "daman-trace-pinner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman trace-pinner forager: wraps web3.storage to expose IPFS pinning of reasoning traces behind chi:pin-trace / chi:trace-pinned. Consumer agents (watchdog, arbiter) hold no web3.storage credentials. Mirrors the humfs storage-as-bee template from hum."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true }
+
+[[bin]]
+name = "daman-trace-pinner"
+path = "src/main.rs"

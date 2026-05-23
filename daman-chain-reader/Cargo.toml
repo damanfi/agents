@@ -1,0 +1,23 @@
+[package]
+name = "daman-chain-reader"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman chain-reader forager: wraps Alchemy (EVM) and Helius (Solana) behind chi:query-history / chi:history-result and chi:query-balances / chi:balances-result. Consumer agents hold no RPC credentials. Mirrors the paid-oracle wrap-an-HTTP-API-as-bee template from hum."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true }
+
+[[bin]]
+name = "daman-chain-reader"
+path = "src/main.rs"
