@@ -1,0 +1,21 @@
+[package]
+name = "daman-watchdog"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman watchdog bee: stateful degradation detector. Listens for trade-executed and settlement-completed chis, files slash-claims when leader behavior crosses a threshold."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+libc = { workspace = true }
+
+[[bin]]
+name = "daman-watchdog"
+path = "src/main.rs"

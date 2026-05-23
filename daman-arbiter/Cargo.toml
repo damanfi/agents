@@ -1,0 +1,21 @@
+[package]
+name = "daman-arbiter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman arbiter bee: stateful ruler on disputed slash-claims. Listens for dispute-opened chis, evaluates evidence, emits ruling chis."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+libc = { workspace = true }
+
+[[bin]]
+name = "daman-arbiter"
+path = "src/main.rs"
