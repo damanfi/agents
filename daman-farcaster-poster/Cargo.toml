@@ -1,0 +1,23 @@
+[package]
+name = "daman-farcaster-poster"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman forager bee: wraps the Neynar API to expose Farcaster cast publishing as a hum chi-pair (cast-publish / cast-published). Mirrors the twilio-sms outbound-messaging-as-bee shape."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true }
+
+[[bin]]
+name = "daman-farcaster-poster"
+path = "src/main.rs"

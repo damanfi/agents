@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+#
+# Single image carrying humd + daman-watchdog. Each container starts
+# humd against a mounted ed25519 keypair, waits for the thrum socket,
+# then starts the watchdog. The compose file orchestrates five copies
+# of this image, each with a distinct key and randomized policy env.
+#
+# Build:  docker build -f docker/Dockerfile.watchdog -t damanfi/watchdog:dev .
+#
+# Args:
+#   HUM_REPO  github URL for the hum source (default: adiled/hum)
+#   HUM_REF   git ref to pin (default: main)
+
+ARG HUM_REPO=https://github.com/adiled/hum.git
+ARG HUM_REF=main
+
+FROM rust:1.83-slim AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Build humd from the hum source. Pinned by ref so the bee farm can be
+# reproduced across machines. Use a shallow clone to keep image size
+# down.
+ARG HUM_REPO
+ARG HUM_REF
+RUN git clone --depth 1 --branch ${HUM_REF} ${HUM_REPO} /build/hum
+RUN cargo install --path /build/hum/humd --root /build/out --locked
+
+# Build daman-watchdog from the local damanfi/agents workspace.
+COPY Cargo.toml Cargo.lock ./
+COPY daman-watchdog ./daman-watchdog
+COPY daman-arbiter ./daman-arbiter
+COPY daman-farcaster-poster ./daman-farcaster-poster
+RUN cargo build --release -p daman-watchdog
+
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates jq \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/out/bin/humd /usr/local/bin/humd
+COPY --from=builder /build/target/release/daman-watchdog /usr/local/bin/daman-watchdog
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENV XDG_RUNTIME_DIR=/run/hum
+ENV XDG_STATE_HOME=/state
+ENV XDG_CONFIG_HOME=/config
+ENV HUM_THRUM_SOCK=/run/hum/hum/thrum.sock
+ENV RUST_LOG=info
+
+# Per-container overrides land via env in the compose file.
+ENV DAMAN_WATCHDOG_WINDOW_SIZE=50
+ENV DAMAN_WATCHDOG_LOSS_STREAK=5
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

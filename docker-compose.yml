@@ -1,0 +1,103 @@
+# Bee-farm docker-compose. Five watchdog containers, each running its
+# own humd plus the daman-watchdog binary. Identities and peer mesh
+# are minted by `tools/farm-up.sh` before `docker compose up`.
+#
+# Run:
+#   ./tools/farm-up.sh
+#   docker compose up -d
+#   docker compose logs -f
+#
+# Inject:
+#   python3 tools/degradation-injector/main.py --leader 0x...
+#
+# Tear down:
+#   docker compose down -v
+version: "3.9"
+
+x-watchdog-base: &watchdog-base
+  image: damanfi/watchdog:dev
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.watchdog
+  restart: unless-stopped
+  networks:
+    - bee-farm
+  environment:
+    HUM_LOG_LEVEL: ${HUM_LOG_LEVEL:-info}
+
+services:
+  watchdog-1:
+    <<: *watchdog-base
+    container_name: daman-watchdog-1
+    volumes:
+      - ./keys/watchdog-1:/keys:ro
+      - watchdog-1-state:/state
+      - watchdog-1-config:/config
+    environment:
+      DAMAN_WATCHDOG_WINDOW_SIZE: "${WD1_WINDOW:-32}"
+      DAMAN_WATCHDOG_LOSS_STREAK: "${WD1_STREAK:-3}"
+      RUST_LOG: "info"
+
+  watchdog-2:
+    <<: *watchdog-base
+    container_name: daman-watchdog-2
+    volumes:
+      - ./keys/watchdog-2:/keys:ro
+      - watchdog-2-state:/state
+      - watchdog-2-config:/config
+    environment:
+      DAMAN_WATCHDOG_WINDOW_SIZE: "${WD2_WINDOW:-48}"
+      DAMAN_WATCHDOG_LOSS_STREAK: "${WD2_STREAK:-4}"
+      RUST_LOG: "info"
+
+  watchdog-3:
+    <<: *watchdog-base
+    container_name: daman-watchdog-3
+    volumes:
+      - ./keys/watchdog-3:/keys:ro
+      - watchdog-3-state:/state
+      - watchdog-3-config:/config
+    environment:
+      DAMAN_WATCHDOG_WINDOW_SIZE: "${WD3_WINDOW:-55}"
+      DAMAN_WATCHDOG_LOSS_STREAK: "${WD3_STREAK:-5}"
+      RUST_LOG: "info"
+
+  watchdog-4:
+    <<: *watchdog-base
+    container_name: daman-watchdog-4
+    volumes:
+      - ./keys/watchdog-4:/keys:ro
+      - watchdog-4-state:/state
+      - watchdog-4-config:/config
+    environment:
+      DAMAN_WATCHDOG_WINDOW_SIZE: "${WD4_WINDOW:-68}"
+      DAMAN_WATCHDOG_LOSS_STREAK: "${WD4_STREAK:-6}"
+      RUST_LOG: "info"
+
+  watchdog-5:
+    <<: *watchdog-base
+    container_name: daman-watchdog-5
+    volumes:
+      - ./keys/watchdog-5:/keys:ro
+      - watchdog-5-state:/state
+      - watchdog-5-config:/config
+    environment:
+      DAMAN_WATCHDOG_WINDOW_SIZE: "${WD5_WINDOW:-78}"
+      DAMAN_WATCHDOG_LOSS_STREAK: "${WD5_STREAK:-7}"
+      RUST_LOG: "info"
+
+networks:
+  bee-farm:
+    driver: bridge
+
+volumes:
+  watchdog-1-state:
+  watchdog-1-config:
+  watchdog-2-state:
+  watchdog-2-config:
+  watchdog-3-state:
+  watchdog-3-config:
+  watchdog-4-state:
+  watchdog-4-config:
+  watchdog-5-state:
+  watchdog-5-config:

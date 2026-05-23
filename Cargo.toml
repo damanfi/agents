@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["daman-watchdog", "daman-arbiter"]
+members = ["daman-watchdog", "daman-arbiter", "daman-farcaster-poster"]
 
 [workspace.package]
 version = "0.1.0"
@@ -18,3 +18,4 @@ parking_lot = "0.12"
 uuid = { version = "1", features = ["v4"] }
 hex = "0.4"
 libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

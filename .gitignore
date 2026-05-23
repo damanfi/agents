@@ -6,6 +6,15 @@ Cargo.lock
 .env
 .env.*
 
+# bee-farm secrets
+/keys/
+!/keys/.gitkeep
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
 # logs
 *.log
 
