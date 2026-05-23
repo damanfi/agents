@@ -1,15 +1,19 @@
 # damanfi/agents
 
-Reference hive definitions for Daman on hum. Four member crates: `daman-watchdog`, `daman-arbiter`, `daman-farcaster-poster`, and `daman-recruiter`. All speak the chi vocabulary documented in `damanfi/protocol::HiveVocabulary.md` plus the social-posting and recruitment extensions below.
+Reference hive definitions for Daman on hum. Eight member crates: `daman-watchdog`, `daman-arbiter`, `daman-farcaster-poster`, `daman-recruiter`, `daman-chain-reader`, `daman-trace-pinner`, `daman-universe-keeper`, and `daman-underwriter`. All speak the chi vocabulary documented in `damanfi/protocol::HiveVocabulary.md` plus the social-posting, recruitment, history, trace, universe-rebalance, and underwriting extensions below.
 
 ## Propensity
 
 | bee | statefulness | richness | wire shape |
 |---|---|---|---|
-| daman-watchdog | stateful (rolling window per leader) | thick (degradation policy) | listener-mostly, emits `slash-claim` |
-| daman-arbiter | stateful (open disputes) | thick (ruling policy) | listener for `dispute-opened`, speaker of `ruling` |
+| daman-watchdog | stateful (rolling window per leader) | thick (degradation policy) | listener-mostly, emits `slash-claim` + `pin-trace` |
+| daman-arbiter | stateful (open disputes) | thick (ruling policy) | listener for `dispute-opened`, speaker of `ruling` + `pin-trace` |
 | daman-farcaster-poster | stateless | lean | listener for `cast-publish`, speaker of `cast-published` |
 | daman-recruiter | stateful (invited-roster) | medium | speaker of `query-history`, `cast-publish`, `attest-recruitment`; listener for `history-result`, `cast-published` |
+| daman-chain-reader | stateless | lean | listener for `query-history` and `query-balances`; speaker of `history-result` and `balances-result` |
+| daman-trace-pinner | stateless | lean | listener for `pin-trace`, speaker of `trace-pinned` |
+| daman-universe-keeper | stateful (last-seen snapshot) | lean | speaker of `universe-rebalance` |
+| daman-underwriter | stateful (pending rounds) | medium | listener for `register-leader-request` and `history-result`; speaker of `query-history` and `underwriter-decision` |
 
 ## Wire
 

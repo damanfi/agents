@@ -138,6 +138,7 @@ async fn main() -> Result<()> {
                 // Reference policy: uphold immediately at the protocol
                 // slash cap. Real deployments delay until the window
                 // closes and substitute richer evaluation here.
+                let ruling_nonce = format!("ruling-{}", args.claim_id);
                 let ruling = json!({
                     "chi": "ruling",
                     "args": {
@@ -148,6 +149,38 @@ async fn main() -> Result<()> {
                     }
                 });
                 write_line(&mut write_half, &ruling).await?;
+
+                // Emit a parallel reasoning-trace pin request. The
+                // trace-pinner forager replies with chi:trace-pinned
+                // carrying the CID; off-chain observers correlate via
+                // ruling_nonce. The CID lands on chain in the A1
+                // follow-on alongside the traceCid field addition to
+                // ArbiterRuled.
+                let trace = json!({
+                    "chi": "gossip-publish",
+                    "topic": "daman/trace",
+                    "payload": {
+                        "chi": "pin-trace",
+                        "args": {
+                            "trace_json": {
+                                "agent": BEE_NAME,
+                                "decision": "ruling",
+                                "claim_id": args.claim_id,
+                                "leader": args.leader,
+                                "slash_amount": REFERENCE_SLASH_AMOUNT_HEX,
+                                "upheld": true,
+                                "policy": "reference-auto-uphold-at-cap",
+                                "ruling_nonce": &ruling_nonce,
+                            },
+                            "metadata": {
+                                "agent": BEE_NAME,
+                                "version": env!("CARGO_PKG_VERSION"),
+                            },
+                            "request_id": &ruling_nonce,
+                        }
+                    }
+                });
+                write_line(&mut write_half, &trace).await?;
             }
             InboundFrame::Hello(_) | InboundFrame::Other => {}
         }

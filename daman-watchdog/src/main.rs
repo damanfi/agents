@@ -180,18 +180,54 @@ async fn main() -> Result<()> {
 
                 if streak >= cfg.loss_streak_threshold {
                     let evidence_hash = synthesize_evidence_hash(&args.leader, &args.trade_id);
+                    let policy = format!("loss-streak >= {}", cfg.loss_streak_threshold);
+                    let claim_nonce = Uuid::new_v4().to_string();
+
+                    // Emit the slash-claim immediately (on-chain critical path).
                     let claim = json!({
                         "chi": "slash-claim",
                         "args": {
                             "leader": args.leader,
                             "evidenceHash": evidence_hash,
-                            "policy": format!("loss-streak >= {}", cfg.loss_streak_threshold),
+                            "policy": &policy,
                             "watchdog": BEE_NAME,
-                            "claimNonce": Uuid::new_v4().to_string(),
+                            "claimNonce": &claim_nonce,
                         }
                     });
                     info!(leader = %args.leader, streak, "emitting slash-claim");
                     write_line(&mut write_half, &claim).await?;
+
+                    // Emit a parallel reasoning-trace pin request (off-chain
+                    // audit surface). The trace-pinner forager picks this up
+                    // and replies with chi:trace-pinned carrying the CID.
+                    // The CID lands on chain in the A1 follow-on alongside
+                    // BountyAccrual + ReputationRegistry.
+                    let trace = json!({
+                        "chi": "gossip-publish",
+                        "topic": "daman/trace",
+                        "payload": {
+                            "chi": "pin-trace",
+                            "args": {
+                                "trace_json": {
+                                    "agent": BEE_NAME,
+                                    "decision": "slash-claim",
+                                    "leader": args.leader,
+                                    "policy": &policy,
+                                    "loss_streak": streak,
+                                    "settlement_window": cfg.window_size,
+                                    "evidence_hash": &evidence_hash,
+                                    "claim_nonce": &claim_nonce,
+                                },
+                                "metadata": {
+                                    "agent": BEE_NAME,
+                                    "version": env!("CARGO_PKG_VERSION"),
+                                },
+                                "request_id": &claim_nonce,
+                            }
+                        }
+                    });
+                    write_line(&mut write_half, &trace).await?;
+
                     // Reset the streak so we do not retrigger immediately.
                     state.lock().entry(args.leader).or_default().loss_streak = 0;
                 }
