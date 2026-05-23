@@ -1,0 +1,22 @@
+[package]
+name = "daman-recruiter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman recruiter bee: mesh-native scan + invite. Publishes chi:query-history to the chain-reader forager, intersects spot-only candidates with no perp touches, publishes chi:cast-publish to the farcaster-poster, and emits an on-chain attestRecruitment intent."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+
+[[bin]]
+name = "daman-recruiter"
+path = "src/main.rs"

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["daman-watchdog", "daman-arbiter", "daman-farcaster-poster"]
+members = ["daman-watchdog", "daman-arbiter", "daman-farcaster-poster", "daman-recruiter"]
 
 [workspace.package]
 version = "0.1.0"

@@ -1,6 +1,6 @@
 # damanfi/agents
 
-Reference hive definitions for Daman on hum. Three member crates: `daman-watchdog`, `daman-arbiter`, and `daman-farcaster-poster`. All three speak the chi vocabulary documented in `damanfi/protocol::HiveVocabulary.md` plus the social-posting extension below.
+Reference hive definitions for Daman on hum. Four member crates: `daman-watchdog`, `daman-arbiter`, `daman-farcaster-poster`, and `daman-recruiter`. All speak the chi vocabulary documented in `damanfi/protocol::HiveVocabulary.md` plus the social-posting and recruitment extensions below.
 
 ## Propensity
 
@@ -9,6 +9,7 @@ Reference hive definitions for Daman on hum. Three member crates: `daman-watchdo
 | daman-watchdog | stateful (rolling window per leader) | thick (degradation policy) | listener-mostly, emits `slash-claim` |
 | daman-arbiter | stateful (open disputes) | thick (ruling policy) | listener for `dispute-opened`, speaker of `ruling` |
 | daman-farcaster-poster | stateless | lean | listener for `cast-publish`, speaker of `cast-published` |
+| daman-recruiter | stateful (invited-roster) | medium | speaker of `query-history`, `cast-publish`, `attest-recruitment`; listener for `history-result`, `cast-published` |
 
 ## Wire
 
@@ -21,6 +22,8 @@ Emits `chi:"slash-claim"` when the loss-streak threshold is crossed. The bridge 
 `daman-arbiter` listens for `chi:"dispute-opened"`. Emits `chi:"ruling"`. The bridge forager dispatches `arbiterRule(claimId, slashAmount, upheld)` on chain.
 
 `daman-farcaster-poster` listens for `chi:"cast-publish"` on the `daman/cast` gossip topic. Wraps the Neynar API to publish a Farcaster cast from the operator-controlled handle and emits `chi:"cast-published"` carrying the cast hash and timestamp. Mirrors the `twilio-sms` outbound-messaging-as-bee pattern from hum: provider credentials, rate limits, and signer custody live in this bee so consumer agents (recruiter, future marketing bees) never touch Neynar directly.
+
+`daman-recruiter` is mesh-native by construction: it never imports an Alchemy, Helius, or Neynar client. On a configurable cadence the recruiter publishes `chi:"query-history"` on `daman/history` (eight queries per round: four chains times two filters), consumes `chi:"history-result"` from the chain-reader forager, intersects spot-only addresses with addresses that touched perpetuals to identify candidates, and for each candidate emits two artifacts: a `chi:"cast-publish"` to the farcaster-poster carrying the templated invitation and a deterministic rationale hash, and a `chi:"attest-recruitment"` to the bridge for on-chain dispatch. The bee holds no credentials.
 
 ## ADR-001
 
@@ -37,6 +40,9 @@ The watchdog and arbiter source events only from the operator-side oracle's read
 | `NEYNAR_SIGNER_UUID` | farcaster-poster | none | uuid of the registered Farcaster signer |
 | `DAMANFI_FARCASTER_FID` | farcaster-poster | none | numeric FID for the operator-controlled handle |
 | `NEYNAR_API_BASE` | farcaster-poster | `https://api.neynar.com` | base URL override for tests |
+| `DAMAN_RECRUITER_SCAN_INTERVAL_SECS` | recruiter | `3600` | seconds between scan rounds |
+| `DAMAN_RECRUITER_LOOKBACK_DAYS` | recruiter | `90` | history depth per query |
+| `DAMAN_RECRUITER_CHAINS` | recruiter | `arc,polygon,ethereum,solana` | comma-separated chain list |
 
 ## Run
 
@@ -45,6 +51,7 @@ The watchdog and arbiter source events only from the operator-side oracle's read
 cargo run -p daman-watchdog
 cargo run -p daman-arbiter
 cargo run -p daman-farcaster-poster
+cargo run -p daman-recruiter
 ```
 
 The bees self-announce to the mesh on connection. Other humds discover them via the standard `nestling_discover` flow documented at `github.com/adiled/hum`. Anyone can run a Daman watchdog by following `github.com/damanfi/agents`; the handshake is the registration.
