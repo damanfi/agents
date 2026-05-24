@@ -1,6 +1,6 @@
 # damanfi/agents
 
-Reference hive definitions for Daman on hum. Eight member crates: `daman-watchdog`, `daman-arbiter`, `daman-farcaster-poster`, `daman-recruiter`, `daman-chain-reader`, `daman-trace-pinner`, `daman-universe-keeper`, and `daman-underwriter`. All speak the chi vocabulary documented in `damanfi/protocol::HiveVocabulary.md` plus the social-posting, recruitment, history, trace, universe-rebalance, and underwriting extensions below.
+Reference hive definitions for Daman on hum. Ten member crates: `daman-watchdog`, `daman-arbiter`, `daman-farcaster-poster`, `daman-recruiter`, `daman-chain-reader`, `daman-trace-pinner`, `daman-universe-keeper`, `daman-underwriter`, `daman-relief`, plus the shared `daman-credit-policy` library. All speak the chi vocabulary documented in `damanfi/protocol::HiveVocabulary.md` plus the social-posting, recruitment, history, trace, universe-rebalance, underwriting, and credit extensions below.
 
 ## Propensity
 
@@ -87,6 +87,23 @@ docker compose logs -f
 ```
 
 The injector reads `DAMAN_INJECTOR_KEY` and `DAMAN_COPY_BOND` from env. Faucet round-trip for the six wallets (five watchdog humds + one injector) is the operator's responsibility before the first run.
+
+## Credit policy: borrowing from DamanBenevolence
+
+Bees that hold their own EOA can participate in the permissionless agent-credit primitive at `DamanBenevolence` (Arc testnet proxy `0xd66812b02F2CA8C057e68e2E80e8c22500A3b9aD`). Two entry paths:
+
+- **Direct:** bee calls `requestLoan(amount)` from its own wallet. Requires gas. Suitable when the bee balance is between `GAS_MIN` (0.20 USDC) and `LOW_THRESHOLD` (1.00 USDC).
+- **Peer-to-peer relief:** bee signs an EIP-712 `LoanRequest` payload (free, no gas) and gossips `chi:credit-signed-request` on `daman/credit/p2p`. A `daman-relief` bee picks it up and submits on chain. Suitable when the bee is fully bust (balance below `GAS_MIN`).
+
+The shared `daman-credit-policy` crate provides:
+
+- `classify(balance_atomic) -> CreditBranch::{Bust, Low, Normal}`: branch the bee should take based on its current USDC balance.
+- `sign_loan_request(signer, chain_id, verifying_contract, amount, nonce, deadline) -> SignedLoanRequestBody`: EIP-712 sign a LoanRequest. The returned body slots into the `request` + `signature` fields of the outgoing gossip frame.
+- `recommended_loan_amount(current_debt_atomic) -> u128`: amount to ask for, capped to the per-borrower headroom under `PER_BORROWER_CAP` (5 USDC).
+
+Bees that need the credit primitive add `daman-credit-policy = { path = "../daman-credit-policy" }` to their `Cargo.toml`, hold an EVM private key (via `DAMAN_BEE_KEY` env or per-bee config), and periodically check balance against the branch table. On `Bust`, sign + gossip; on `Low`, submit `requestLoan` directly; on `Normal`, optionally call `repay` when bounty earnings arrive.
+
+Repayments are 1:1 (zero interest). The contract binds debt to the signer's address regardless of who submits on chain, so the relief-bee relay path carries no on-chain liability for the relayer. The `daman-relief` crate carries the relayer implementation; spawn 2-3 pre-funded relief instances ($1 USDC each, enough for ~1000 relay submissions at Arc gas prices) at swarm start.
 
 ## License
 

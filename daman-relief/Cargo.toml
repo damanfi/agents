@@ -1,0 +1,35 @@
+[package]
+name = "daman-relief"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman relief forager bee: listens for chi:credit-signed-request on daman/credit/p2p, validates the EIP-712 signature and on-chain eligibility, and submits requestLoanWithSignature against DamanBenevolence. Wakeel-pattern relayer: the borrower owns the debt, the relief bee owns only the gas cost."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true }
+daman-credit-policy = { path = "../daman-credit-policy" }
+alloy = { version = "0.8", default-features = false, features = [
+    "providers",
+    "transport-http",
+    "rpc-types-eth",
+    "signers",
+    "signer-local",
+    "contract",
+    "sol-types",
+    "network",
+    "reqwest-rustls-tls",
+] }
+
+[[bin]]
+name = "daman-relief"
+path = "src/main.rs"

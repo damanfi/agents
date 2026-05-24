@@ -9,6 +9,8 @@ members = [
     "daman-trace-pinner",
     "daman-universe-keeper",
     "daman-underwriter",
+    "daman-relief",
+    "daman-credit-policy",
 ]
 
 [workspace.package]
