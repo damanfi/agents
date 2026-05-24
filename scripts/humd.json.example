@@ -1,0 +1,30 @@
+# humd.json — hum daemon configuration for the Daman swarm host.
+#
+# Reference layout for the operator. Copy to ~/.config/hum/hum.json and adjust the
+# claude-cli flags + the worker hive cell limit per your machine.
+#
+# Key bits:
+# - `nest.maxProcs` caps concurrent claude-cli cells. Default 8 is enough for a
+#   4-persona smoke; bump to 30+ for the full 27-persona swarm.
+# - `hives.claude-cli.bin` points at the claude executable on $PATH.
+# - `hives.claude-cli.flags` carries the Claude CLI flags used at cell spawn. Per
+#   the brief, --output-format stream-json + --print is the stable pipe shape.
+# - `ensemble` is left null for the single-host smoke. T3 federation comes later.
+{
+  "nest": {
+    "maxProcs": 30,
+    "idleTtlSeconds": 600
+  },
+  "thrum": {
+    "sockPath": null
+  },
+  "hives": {
+    "claude-cli": {
+      "bin": "claude",
+      "flags": ["--output-format", "stream-json", "--print"],
+      "model": "claude-sonnet-4-5",
+      "permission_mode": "default"
+    }
+  },
+  "ensemble": null
+}

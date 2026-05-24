@@ -1,0 +1,31 @@
+[package]
+name = "daman-personas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman persona bees. Five role implementations (leader, follower, watchdog, arbiter, relief) each consuming persona-base from the substrate. A persona is a thin asker: subscribes to gossip + chain events, assembles world state, prompts the local claude-cli worker on its sid, logs the bloom. Variant overlays parametrize the system prompt per persona instance."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true }
+async-trait = "0.1"
+thiserror = "1"
+clap = { version = "4", features = ["derive", "env"] }
+persona-base = { git = "https://github.com/reverbprotocol/protocol", branch = "main" }
+daman-credit-policy = { path = "../daman-credit-policy" }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "daman-persona"
+path = "src/main.rs"

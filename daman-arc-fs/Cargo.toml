@@ -1,0 +1,42 @@
+[package]
+name = "daman-arc-fs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman's Arc-chain forager. Extends reverb-arc-fs from the substrate with 17 daman-specific tools (daman_register_leader, daman_subscribe, daman_record_trade, daman_file_claim, daman_rule_claim, daman_claim_bounty, daman_request_loan*, daman_repay, daman_sign_loan_request, daman_read_*). Per the operating-model standard at https://reverbprotocol.github.io/protocol/OPERATING_MODEL."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true }
+async-trait = "0.1"
+thiserror = "1"
+reverb-arc-fs = { git = "https://github.com/reverbprotocol/protocol", branch = "main" }
+persona-base = { git = "https://github.com/reverbprotocol/protocol", branch = "main" }
+daman-credit-policy = { path = "../daman-credit-policy" }
+alloy = { version = "0.8", default-features = false, features = [
+    "providers",
+    "transport-http",
+    "rpc-types-eth",
+    "signers",
+    "signer-local",
+    "contract",
+    "sol-types",
+    "network",
+    "reqwest-rustls-tls",
+] }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "daman-arc-fs"
+path = "src/main.rs"

@@ -11,6 +11,8 @@ members = [
     "daman-underwriter",
     "daman-relief",
     "daman-credit-policy",
+    "daman-arc-fs",
+    "daman-personas",
 ]
 
 [workspace.package]
