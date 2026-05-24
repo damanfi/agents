@@ -1,27 +1,27 @@
 //! daman-trace-pinner. The IPFS storage forager bee.
 //!
-//! Wraps the web3.storage HTTP upload API to expose reasoning-trace
-//! pinning behind a single chi-pair. Consumer agents (watchdog,
-//! arbiter) publish `chi:pin-trace` carrying the structured trace
-//! payload and a metadata block; the pinner uploads, captures the
-//! returned CID, and emits `chi:trace-pinned` with the CID + pin
-//! method.
+//! Talks directly to a local kubo node's HTTP API (the IPFS reference
+//! implementation) to pin reasoning-trace JSON. The CID returned is
+//! content-addressable and re-fetchable from any IPFS gateway. No
+//! web3.storage / Storacha credential is required: the operator runs
+//! a kubo container alongside the watchdog farm and the bee dials its
+//! local HTTP port.
 //!
-//! The CID is then written into the on-chain ArbiterRuled.traceCid
-//! field by the consumer agent (via the bridge) so every ruling
-//! has a verifiable structured-output trail. Mirrors the humfs
-//! storage-as-bee template from hum.
+//! Mirrors the humfs storage-as-bee template from hum. The chi
+//! vocabulary is unchanged from prior SaaS-wrapper iterations so
+//! consumer agents (watchdog, arbiter) need no refactor.
 //!
 //! Wire (gossip-publish wrappers; payload chi is the semantic):
 //!
 //!   consumer ─► chi:"pin-trace"   { trace_json, metadata } ─► pinner
 //!   consumer ◄─ chi:"trace-pinned" { cid, pin_method }      ◄─ pinner
 //!
-//! Credentials:
+//! Configure:
 //!
-//!   WEB3_STORAGE_TOKEN   bearer token from web3.storage console
-//!   HUM_THRUM_SOCK       humd's NDJSON socket (defaults to XDG runtime)
-//!   WEB3_STORAGE_BASE    override for tests (defaults to https://api.web3.storage)
+//!   HUM_THRUM_SOCK   humd's NDJSON socket (defaults to XDG runtime)
+//!   KUBO_API_URL     default http://localhost:5001
+//!
+//! Zero API keys end-to-end.
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -36,14 +36,13 @@ use tracing::{info, warn};
 const BEE_NAME: &str = "daman-trace-pinner";
 const BEE_VERSION: &str = env!("CARGO_PKG_VERSION");
 const TRACE_TOPIC: &str = "daman/trace";
-const WEB3_STORAGE_DEFAULT_BASE: &str = "https://api.web3.storage";
-const UPLOAD_PATH: &str = "/upload";
+const DEFAULT_KUBO_URL: &str = "http://localhost:5001";
+const KUBO_ADD_PATH: &str = "/api/v0/add";
 
 #[derive(Debug, Clone)]
 struct Config {
     sock_path: String,
-    web3_storage_token: String,
-    web3_storage_base: String,
+    kubo_api_url: String,
     request_timeout: Duration,
 }
 
@@ -54,10 +53,8 @@ impl Config {
         let default_sock = format!("{runtime}/hum/thrum.sock");
         Ok(Self {
             sock_path: std::env::var("HUM_THRUM_SOCK").unwrap_or(default_sock),
-            web3_storage_token: std::env::var("WEB3_STORAGE_TOKEN")
-                .context("WEB3_STORAGE_TOKEN is required")?,
-            web3_storage_base: std::env::var("WEB3_STORAGE_BASE")
-                .unwrap_or_else(|_| WEB3_STORAGE_DEFAULT_BASE.to_string()),
+            kubo_api_url: std::env::var("KUBO_API_URL")
+                .unwrap_or_else(|_| DEFAULT_KUBO_URL.into()),
             request_timeout: Duration::from_secs(30),
         })
     }
@@ -93,7 +90,7 @@ async fn main() -> Result<()> {
     let cfg = Config::from_env()?;
     info!(
         sock = %cfg.sock_path,
-        base = %cfg.web3_storage_base,
+        kubo = %cfg.kubo_api_url,
         "{BEE_NAME} starting"
     );
 
@@ -117,7 +114,7 @@ async fn main() -> Result<()> {
         "propensity": {
             "statefulness": "stateless",
             "richness": "lean",
-            "wire": "web3.storage/upload"
+            "wire": "ipfs/kubo-http"
         },
         "chis": ["hello", "gossip-publish", "pin-trace", "trace-pinned"],
         "topics": [TRACE_TOPIC],
@@ -183,11 +180,11 @@ async fn handle_pin_request(
             return;
         }
     };
-    match upload(cfg, http, &req).await {
+    match upload_to_kubo(cfg, http, &req).await {
         Ok(cid) => {
             let result = PinResult {
                 cid: cid.clone(),
-                pin_method: "ipfs".into(),
+                pin_method: "ipfs/kubo".into(),
                 request_id: req.request_id.clone(),
             };
             publish_result(&result, write).await;
@@ -200,40 +197,56 @@ async fn handle_pin_request(
     }
 }
 
-async fn upload(
+/// POST the trace JSON to kubo's `/api/v0/add` endpoint as a multipart
+/// file upload. Kubo returns a single-line NDJSON response containing
+/// the `Hash` field with the resulting CID. The chunk is pinned to
+/// the local node by default; the CID is content-addressable and
+/// re-fetchable from any IPFS gateway.
+async fn upload_to_kubo(
     cfg: &Config,
     http: &reqwest::Client,
     req: &PinRequest,
 ) -> Result<String> {
-    let url = format!("{}{}", cfg.web3_storage_base, UPLOAD_PATH);
+    let url = format!("{}{}?pin=true", cfg.kubo_api_url, KUBO_ADD_PATH);
     let body = serde_json::to_vec(&json!({
         "trace": req.trace_json,
         "metadata": req.metadata,
     }))?;
+    let part = reqwest::multipart::Part::bytes(body)
+        .file_name("trace.json")
+        .mime_str("application/json")
+        .context("multipart mime")?;
+    let form = reqwest::multipart::Form::new().part("file", part);
     let resp = http
         .post(&url)
-        .bearer_auth(&cfg.web3_storage_token)
-        .header("content-type", "application/json")
-        .body(body)
+        .multipart(form)
         .send()
         .await
-        .context("web3.storage request")?;
+        .context("kubo request")?;
     let status = resp.status();
-    let payload: Value = resp.json().await.context("web3.storage parse")?;
+    let text = resp.text().await.context("kubo response body")?;
     if !status.is_success() {
-        return Err(anyhow!("web3.storage {} {}", status, payload));
+        return Err(anyhow!("kubo {} {}", status, text));
     }
-    parse_upload_response(&payload)
+    parse_kubo_add_response(&text)
 }
 
-/// Extract the CID from a web3.storage upload response. Factored for
-/// fixture-based testing without an HTTP server.
-fn parse_upload_response(payload: &Value) -> Result<String> {
-    payload
-        .get("cid")
+/// Extract the CID from kubo's `/api/v0/add` response. The response is
+/// NDJSON; the final non-empty line carries the file's CID under
+/// `Hash`. Factored out for fixture-based testing.
+fn parse_kubo_add_response(body: &str) -> Result<String> {
+    let last_line = body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .last()
+        .ok_or_else(|| anyhow!("empty kubo response"))?;
+    let v: Value =
+        serde_json::from_str(last_line).context("kubo NDJSON line not JSON")?;
+    v.get("Hash")
         .and_then(Value::as_str)
         .map(String::from)
-        .ok_or_else(|| anyhow!("missing cid in response: {}", payload))
+        .ok_or_else(|| anyhow!("missing Hash in kubo response: {}", last_line))
 }
 
 async fn publish_result(
@@ -294,20 +307,23 @@ mod tests {
     }
 
     #[test]
-    fn parse_upload_response_extracts_cid() {
-        let payload = json!({
-            "cid": "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
-            "carCid": "bagbaiera...",
-            "type": "Multipart"
-        });
-        let cid = parse_upload_response(&payload).unwrap();
-        assert!(cid.starts_with("bafybei"));
+    fn parse_kubo_add_response_extracts_cid() {
+        let body = r#"{"Name":"trace.json","Hash":"QmZjT8MgKM7hY7vXxBgnNQyHbS3hRdGRkrK6tF3kEx5e8b","Size":"512"}"#;
+        let cid = parse_kubo_add_response(body).unwrap();
+        assert!(cid.starts_with("Qm") || cid.starts_with("bafy"));
     }
 
     #[test]
-    fn parse_upload_response_errors_on_missing_cid() {
-        let payload = json!({ "error": "unauthorized" });
-        assert!(parse_upload_response(&payload).is_err());
+    fn parse_kubo_add_response_handles_multiline_responses() {
+        let body = "{\"Name\":\"a\",\"Hash\":\"Qmfirst\",\"Size\":\"100\"}\n{\"Name\":\"b\",\"Hash\":\"Qmsecond\",\"Size\":\"200\"}";
+        let cid = parse_kubo_add_response(body).unwrap();
+        assert_eq!(cid, "Qmsecond");
+    }
+
+    #[test]
+    fn parse_kubo_add_response_errors_on_missing_hash() {
+        let body = r#"{"Name":"trace.json","Size":"512"}"#;
+        assert!(parse_kubo_add_response(body).is_err());
     }
 
     #[test]

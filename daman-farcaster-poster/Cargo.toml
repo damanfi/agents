@@ -3,7 +3,7 @@ name = "daman-farcaster-poster"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Daman forager bee: wraps the Neynar API to expose Farcaster cast publishing as a hum chi-pair (cast-publish / cast-published). Mirrors the twilio-sms outbound-messaging-as-bee shape."
+description = "Daman hub-poster forager bee: talks Farcaster Hub protocol directly with a local ed25519 signer, no Neynar SaaS. Crate name preserved for continuity; internal naming is daman-hub-poster."
 
 [dependencies]
 tokio = { workspace = true }
@@ -17,6 +17,8 @@ uuid = { workspace = true }
 hex = { workspace = true }
 libc = { workspace = true }
 reqwest = { workspace = true }
+ed25519-dalek = "2"
+sha2 = "0.10"
 
 [[bin]]
 name = "daman-farcaster-poster"

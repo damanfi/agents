@@ -16,7 +16,6 @@ parking_lot = { workspace = true }
 uuid = { workspace = true }
 hex = { workspace = true }
 libc = { workspace = true }
-reqwest = { workspace = true }
 
 [[bin]]
 name = "daman-underwriter"

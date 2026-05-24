@@ -35,15 +35,21 @@ The watchdog and arbiter source events only from the operator-side oracle's read
 
 ## Configure
 
+Zero API keys end-to-end. Every forager dials a protocol endpoint directly with a public default URL the operator can override; no SaaS deplatform vector at the bee boundary.
+
 | env | bee | default | what |
 |---|---|---|---|
 | `HUM_THRUM_SOCK` | all | `$XDG_RUNTIME_DIR/hum/thrum.sock` | humd's NDJSON socket |
 | `DAMAN_WATCHDOG_WINDOW_SIZE` | watchdog | `50` | rolling-window size per leader |
 | `DAMAN_WATCHDOG_LOSS_STREAK` | watchdog | `5` | consecutive losses that trigger a slash-claim |
-| `NEYNAR_API_KEY` | farcaster-poster | none | Neynar developer-console API key |
-| `NEYNAR_SIGNER_UUID` | farcaster-poster | none | uuid of the registered Farcaster signer |
+| `FARCASTER_HUB_URL` | farcaster-poster | `https://nemes.farcaster.xyz` | Farcaster Hub HTTP endpoint |
+| `FARCASTER_SIGNER_KEY_PATH` | farcaster-poster | none | path to 32-byte ed25519 signer registered on the keystone contract |
 | `DAMANFI_FARCASTER_FID` | farcaster-poster | none | numeric FID for the operator-controlled handle |
-| `NEYNAR_API_BASE` | farcaster-poster | `https://api.neynar.com` | base URL override for tests |
+| `ARC_RPC_URL` | chain-reader | `https://rpc.testnet.arc.network` | Arc JSON-RPC |
+| `POLYGON_RPC_URL` | chain-reader | `https://polygon-rpc.com` | Polygon JSON-RPC |
+| `ETHEREUM_RPC_URL` | chain-reader | `https://eth.llamarpc.com` | Ethereum JSON-RPC |
+| `SOLANA_RPC_URL` | chain-reader | `https://api.mainnet-beta.solana.com` | Solana RPC |
+| `KUBO_API_URL` | trace-pinner | `http://localhost:5001` | local kubo HTTP API |
 | `DAMAN_RECRUITER_SCAN_INTERVAL_SECS` | recruiter | `3600` | seconds between scan rounds |
 | `DAMAN_RECRUITER_LOOKBACK_DAYS` | recruiter | `90` | history depth per query |
 | `DAMAN_RECRUITER_CHAINS` | recruiter | `arc,polygon,ethereum,solana` | comma-separated chain list |

@@ -18,10 +18,11 @@
 //! follow-on; the chi-side contract is published independent of the
 //! on-chain landing).
 //!
-//! A9 (Compliance Engine HTTP call) extends this crate by inserting a
-//! POST to `https://api.circle.com/v1/w3s/compliance/screening/addresses`
-//! before the chain-history checks fire. Rejects on SANCTIONS / DENY
-//! short-circuit the chain queries.
+//! Zero API keys end-to-end. The three on-RPC checks via the
+//! chain-reader forager are sufficient admission cost; the prior A9
+//! Circle Compliance Engine HTTP call has been removed per the
+//! protocol-talker pivot to eliminate the SaaS deplatform vector at
+//! the bee boundary.
 //!
 //! Wire:
 //!
@@ -36,8 +37,6 @@
 //!   DAMAN_UNDERWRITER_LOOKBACK_DAYS     history depth (default 90)
 //!   DAMAN_UNDERWRITER_RETAIL_AUM_USDC   retail-tier max claimed AUM atomic (default 250_000 * 10^18)
 //!   DAMAN_UNDERWRITER_MID_AUM_USDC      mid-tier max claimed AUM atomic (default 5_000_000 * 10^18)
-//!   CIRCLE_COMPLIANCE_API_KEY           used by A9 extension; absence skips the screen
-//!   CIRCLE_COMPLIANCE_API_BASE          override for tests; default https://api.circle.com
 
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
@@ -63,8 +62,7 @@ struct Config {
     lookback_days: u32,
     retail_aum_cap_atomic: u128,
     mid_aum_cap_atomic: u128,
-    compliance_api_key: Option<String>,
-    compliance_api_base: String,
+    #[allow(dead_code)]
     request_timeout: std::time::Duration,
 }
 
@@ -75,7 +73,6 @@ impl Config {
         let default_sock = format!("{runtime}/hum/thrum.sock");
         let parse_u128 =
             |k: &str, d: u128| std::env::var(k).ok().and_then(|s| s.parse().ok()).unwrap_or(d);
-        let compliance_api_key = std::env::var("CIRCLE_COMPLIANCE_API_KEY").ok();
         Ok(Self {
             sock_path: std::env::var("HUM_THRUM_SOCK").unwrap_or(default_sock),
             lookback_days: std::env::var("DAMAN_UNDERWRITER_LOOKBACK_DAYS")
@@ -90,9 +87,6 @@ impl Config {
                 "DAMAN_UNDERWRITER_MID_AUM_USDC",
                 5_000_000u128 * 10u128.pow(18),
             ),
-            compliance_api_key,
-            compliance_api_base: std::env::var("CIRCLE_COMPLIANCE_API_BASE")
-                .unwrap_or_else(|_| "https://api.circle.com".to_string()),
             request_timeout: std::time::Duration::from_secs(15),
         })
     }
@@ -161,13 +155,8 @@ async fn main() -> Result<()> {
     info!(
         sock = %cfg.sock_path,
         lookback = cfg.lookback_days,
-        has_compliance = cfg.compliance_api_key.is_some(),
         "{BEE_NAME} starting"
     );
-
-    let http = reqwest::Client::builder()
-        .timeout(cfg.request_timeout)
-        .build()?;
 
     let state: Arc<Mutex<State>> = Arc::new(Mutex::new(State::default()));
 
@@ -226,11 +215,10 @@ async fn main() -> Result<()> {
                     None => continue,
                 };
                 let cfg = cfg.clone();
-                let http = http.clone();
                 let state = state.clone();
                 let write_half = write_half.clone();
                 tokio::spawn(async move {
-                    handle_register_request(&cfg, &http, &args, &state, &write_half).await;
+                    handle_register_request(&cfg, &args, &state, &write_half).await;
                 });
             }
             Some("history-result") => {
@@ -263,7 +251,6 @@ fn unwrap_payload(envelope: &Value) -> &Value {
 
 async fn handle_register_request(
     cfg: &Config,
-    http: &reqwest::Client,
     args: &Value,
     state: &Arc<Mutex<State>>,
     write: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
@@ -277,35 +264,6 @@ async fn handle_register_request(
     };
     let candidate_key = req.candidate.to_lowercase();
     let claimed_aum_atomic = u128_from_decimal_or_hex(&req.claimed_aum).unwrap_or(0);
-
-    // A9: Compliance Engine screen as an early-reject. The screen is
-    // skipped when no key is configured so the underwriter still
-    // functions on development without provisioned creds.
-    if let Some(key) = cfg.compliance_api_key.as_deref() {
-        match compliance_screen(http, &cfg.compliance_api_base, key, &req.candidate).await {
-            Ok(Some(risk)) => {
-                info!(candidate = %req.candidate, risk = %risk, "compliance reject");
-                publish_decision(
-                    &Decision {
-                        candidate: req.candidate.clone(),
-                        tier: "Rejected".into(),
-                        required_bond_atomic: "0x0".into(),
-                        reason_code: format!("compliance:{}", risk),
-                        request_id: req.query_id.clone(),
-                    },
-                    write,
-                )
-                .await;
-                return;
-            }
-            Ok(None) => {
-                // Screened clean; proceed.
-            }
-            Err(e) => {
-                warn!(error = %e, "compliance screen failed; proceeding without short-circuit");
-            }
-        }
-    }
 
     {
         let mut s = state.lock();
@@ -433,57 +391,6 @@ pub(crate) fn tier_for_aum(cfg: &Config, aum_atomic: u128) -> (String, u16) {
     }
 }
 
-/// Returns Some(risk) when the candidate is rejected by Circle's
-/// compliance engine, None when the screen is clean.
-async fn compliance_screen(
-    http: &reqwest::Client,
-    api_base: &str,
-    api_key: &str,
-    candidate: &str,
-) -> Result<Option<String>> {
-    let url = format!("{}/v1/w3s/compliance/screening/addresses", api_base);
-    let body = json!({
-        "address": candidate,
-        "chain": "ARC"
-    });
-    let resp = http
-        .post(&url)
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()
-        .await
-        .context("compliance request")?;
-    let status = resp.status();
-    let payload: Value = resp.json().await.context("compliance parse")?;
-    if !status.is_success() {
-        anyhow::bail!("compliance {} {}", status, payload);
-    }
-    Ok(parse_compliance_response(&payload))
-}
-
-/// Pure parser for the compliance response. Returns Some(risk) when
-/// the response carries a SANCTIONS category or a FREEZE_WALLET / DENY
-/// action; None otherwise. Factored for fixture-based tests.
-pub(crate) fn parse_compliance_response(payload: &Value) -> Option<String> {
-    if let Some(categories) = payload.get("riskCategories").and_then(Value::as_array) {
-        for c in categories {
-            if c.as_str() == Some("SANCTIONS") {
-                return Some("SANCTIONS".into());
-            }
-        }
-    }
-    if let Some(actions) = payload.get("recommendedActions").and_then(Value::as_array) {
-        for a in actions {
-            match a.as_str() {
-                Some("FREEZE_WALLET") => return Some("FREEZE_WALLET".into()),
-                Some("DENY") => return Some("DENY".into()),
-                _ => {}
-            }
-        }
-    }
-    None
-}
-
 async fn publish_decision(
     decision: &Decision,
     write: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
@@ -534,8 +441,6 @@ mod tests {
             lookback_days: 90,
             retail_aum_cap_atomic: 250_000u128 * 10u128.pow(18),
             mid_aum_cap_atomic: 5_000_000u128 * 10u128.pow(18),
-            compliance_api_key: None,
-            compliance_api_base: "http://test".into(),
             request_timeout: std::time::Duration::from_secs(1),
         }
     }
@@ -552,33 +457,6 @@ mod tests {
         let (t3, b3) = tier_for_aum(&c, 50_000_000u128 * 10u128.pow(18));
         assert_eq!(t3, "Institutional");
         assert_eq!(b3, 250);
-    }
-
-    #[test]
-    fn parse_compliance_response_flags_sanctions() {
-        let payload = json!({
-            "riskCategories": ["SANCTIONS"],
-            "recommendedActions": []
-        });
-        assert_eq!(parse_compliance_response(&payload).as_deref(), Some("SANCTIONS"));
-    }
-
-    #[test]
-    fn parse_compliance_response_flags_freeze() {
-        let payload = json!({
-            "riskCategories": [],
-            "recommendedActions": ["FREEZE_WALLET"]
-        });
-        assert_eq!(
-            parse_compliance_response(&payload).as_deref(),
-            Some("FREEZE_WALLET")
-        );
-    }
-
-    #[test]
-    fn parse_compliance_response_passes_clean() {
-        let payload = json!({ "riskCategories": [], "recommendedActions": [] });
-        assert!(parse_compliance_response(&payload).is_none());
     }
 
     #[test]

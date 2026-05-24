@@ -86,6 +86,22 @@ services:
       DAMAN_WATCHDOG_LOSS_STREAK: "${WD5_STREAK:-7}"
       RUST_LOG: "info"
 
+  # Local IPFS node. daman-trace-pinner dials this on KUBO_API_URL to
+  # pin reasoning-trace JSON; the CID returned is content-addressable
+  # and re-fetchable from any IPFS gateway. Zero external SaaS
+  # dependency in the trace-pinning path.
+  kubo:
+    image: ipfs/kubo:latest
+    container_name: daman-kubo
+    restart: unless-stopped
+    networks:
+      - bee-farm
+    ports:
+      - "5001:5001"
+      - "8080:8080"
+    volumes:
+      - kubo-data:/data/ipfs
+
 networks:
   bee-farm:
     driver: bridge
@@ -101,3 +117,4 @@ volumes:
   watchdog-4-config:
   watchdog-5-state:
   watchdog-5-config:
+  kubo-data:
