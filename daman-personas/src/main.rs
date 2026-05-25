@@ -1,101 +1,58 @@
-//! daman-persona binary entry point.
-//!
-//! Per-process model: each persona instance runs as its own OS process. The launcher
-//! script `scripts/launch-swarm.sh` spawns N of these with role + variant + bee-name +
-//! sid env. The binary opens a Unix-socket connection to the local humd, emits the
-//! `chi:"hello"` manifest for this persona, subscribes to its gossip topics + chain
-//! event filters, and starts the asker loop.
-//!
-//! The asker loop body lives in `persona-base::AskerLoop`. This binary provides the
-//! concrete `Transport` impl that wires it against humd.
+//! Daman persona binary. One process per bee: one EOA, one hid, one namespaced tool surface,
+//! one humd connection. Composes daman-arc-fs::daman_tools with the substrate's
+//! PersonaForagerBuilder + BeeIdentity per BRIEF_PERSONA_AS_FORAGER.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use daman_personas::{personas::PersonaConfig, personas, variant::Role};
+use daman_arc_fs::{daman_tools, namespace_for_bee, DamanAddrs, DamanCtx};
+use daman_personas::variant::{compose_system_prompt, Role};
+use alloy::signers::local::PrivateKeySigner;
+use reverb_arc_fs::{BeeIdentity, BeeRole, PersonaForagerBuilder, PrivateKey};
+use reverb_arc_fs::tools::ToolCall;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tracing::{info, warn};
 
-/// Claude Code's built-in tool surface that this swarm doesn't want claude to invoke.
-/// Per hum maintainers: humd only auto-removes built-ins that map to a capability a
-/// forager `provides` for; only `fs` is mapped today, so everything else rides through
-/// on top of our 17 daman_* tools unless we explicitly disallow per-turn.
-///
-/// disallowedTools is per-turn, not sticky on the session, so every chi:"prompt" tone
-/// must carry it.
-///
-/// The first block is the maintainer-suggested set. The second block captures every
-/// additional Claude Code built-in observed in a session-ready tools listing that has
-/// no role in the swarm: cron scheduling, worktree management, push notifications,
-/// the internal Task todo list, etc. Anything left out of this list rides through.
 const CLAUDE_BUILT_IN_BLOCKLIST: &[&str] = &[
-    // shell
     "Bash", "BashOutput", "KillShell",
-    // filesystem
     "Read", "Edit", "Write", "MultiEdit", "NotebookEdit",
-    // search
     "Glob", "Grep",
-    // network
     "WebFetch", "WebSearch",
-    // task / planning / chat
     "Task", "TodoWrite", "AskUserQuestion", "ExitPlanMode", "SlashCommand",
-    // observed-but-irrelevant: cron + scheduling
     "CronCreate", "CronDelete", "CronList", "ScheduleWakeup",
-    // worktree management
     "EnterPlanMode", "EnterWorktree", "ExitWorktree",
-    // notifications / monitors / skills
     "Monitor", "PushNotification", "Skill",
-    // internal Task todo list
     "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskUpdate", "TaskStop",
-    // tool-search meta-tool (already shouldn't appear, but defensive)
-    "ToolSearch",
-    // remote trigger / share / cli setup helpers
-    "RemoteTrigger", "ShareOnboardingGuide",
+    "ToolSearch", "RemoteTrigger", "ShareOnboardingGuide",
 ];
 
-fn disallowed_tools_value() -> Value {
-    Value::Array(
-        CLAUDE_BUILT_IN_BLOCKLIST
-            .iter()
-            .map(|s| Value::String((*s).to_string()))
-            .collect(),
-    )
-}
-
 #[derive(Parser, Debug)]
-#[command(name = "daman-persona", about = "Daman persona bee runtime")]
+#[command(name = "daman-persona")]
 struct Cli {
-    /// Role: leader | follower | watchdog | arbiter | relief
     #[arg(long, env = "DAMAN_PERSONA_ROLE")]
     role: String,
-
-    /// Variant identifier per role (e.g. alpha, bravo, v1, v2).
     #[arg(long, env = "DAMAN_PERSONA_VARIANT", default_value = "alpha")]
     variant: String,
-
-    /// Persona bee name. Must be unique across the swarm and present in daman-arc-fs's
-    /// keyring.
     #[arg(long, env = "DAMAN_PERSONA_BEE_NAME")]
     bee_name: String,
-
-    /// EOA address bound to this persona. Used in the persona's system prompt + tool args.
     #[arg(long, env = "DAMAN_PERSONA_EOA_ADDR")]
     eoa_addr: String,
-
-    /// Session id this persona uses for its claude-cli conversation. Defaults to the
-    /// bee_name with a `sid-` prefix.
+    /// Path to the per-bee EOA private-key file (64-char hex, no 0x prefix, no newline).
+    #[arg(long, env = "DAMAN_PERSONA_KEY_PATH")]
+    key_path: PathBuf,
     #[arg(long, env = "DAMAN_PERSONA_SID")]
     sid: Option<String>,
-
-    /// humd socket path. Defaults to env / XDG runtime / /run/user/<uid>.
     #[arg(long, env = "HUM_THRUM_SOCK")]
     sock_path: Option<String>,
-
-    /// Log directory for the persona's chi traffic.
+    #[arg(long, env = "ARC_TESTNET_RPC", default_value = "https://rpc.testnet.arc.network")]
+    rpc_url: String,
+    #[arg(long, env = "ARC_CHAIN_ID", default_value = "5042002")]
+    chain_id: u64,
     #[arg(long, env = "DAMAN_PERSONA_LOG_DIR")]
     log_dir: Option<PathBuf>,
 }
@@ -112,94 +69,90 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let role = Role::parse(&cli.role).context("--role must be leader|follower|watchdog|arbiter|relief")?;
     let sid = cli.sid.unwrap_or_else(|| format!("sid-{}", cli.bee_name));
-    let cfg = PersonaConfig::new(cli.bee_name.clone(), cli.variant.clone(), cli.eoa_addr.clone(), sid.clone());
-
-    let persona = personas::build(role, cfg);
     let sock_path = cli.sock_path.unwrap_or_else(sock_path_default);
+    let namespace = namespace_for_bee(&cli.bee_name);
+
+    // Load per-bee EOA private key (64-char hex, no 0x).
+    let key_hex = std::fs::read_to_string(&cli.key_path)
+        .with_context(|| format!("read key file {}", cli.key_path.display()))?
+        .trim()
+        .to_string();
+    let private_key = PrivateKey::new(format!("0x{key_hex}"))
+        .context("PrivateKey parse")?;
+    let signer = PrivateKeySigner::from_str(&key_hex).context("PrivateKeySigner parse")?;
+
+    // Mint or load the persona's stable ed25519 hid. humd dedupes manifests by hid;
+    // without a stable hid every reconnect leaks a fresh manifest entry.
+    let identity = BeeIdentity::load_or_mint_with_role(&cli.bee_name, BeeRole::Forager)
+        .context("BeeIdentity::load_or_mint_with_role")?;
+
     info!(
-        bee = %persona.bee_name(),
+        bee = %cli.bee_name,
         role = %cli.role,
         variant = %cli.variant,
+        namespace = %namespace,
+        eoa = %cli.eoa_addr,
+        hid = %identity.hid_string(),
         sid = %sid,
         sock = %sock_path,
         "persona starting"
     );
 
+    // Build the per-bee tool set.
+    let addrs = DamanAddrs::default();
+    let ctx = DamanCtx::new(
+        cli.bee_name.clone(),
+        cli.rpc_url.clone(),
+        cli.chain_id,
+        addrs.clone(),
+        signer.clone(),
+    );
+    let tools = daman_tools(ctx, &namespace);
+
+    // Compose the forager via the substrate builder.
+    let forager = PersonaForagerBuilder::default()
+        .bee_name(cli.bee_name.clone())
+        .namespace(namespace.clone())
+        .identity(identity)
+        .private_key(private_key)
+        .with_tools(tools)
+        .allowed_contracts(addrs.allowlist())
+        .wire("daman/arc-fs")
+        .source("https://github.com/damanfi/agents/tree/main/daman-personas")
+        .build()
+        .map_err(|e| anyhow::anyhow!("PersonaForager build: {e:?}"))?;
+
+    let registry = Arc::new(forager.tools);
+    let bee_name = cli.bee_name.clone();
+
+    // Connect to humd.
     let stream = UnixStream::connect(&sock_path)
         .await
         .with_context(|| format!("connect humd at {sock_path}"))?;
     let (read_half, write_half) = stream.into_split();
     let write_half = Arc::new(tokio::sync::Mutex::new(write_half));
 
-    // Emit hello on behalf of this persona.
-    let hello = json!({
-        "chi": "hello",
-        "bee": persona.bee_name(),
-        "version": daman_personas::version(),
-        "protoVersion": "0.7.0",
-        "propensity": {
-            "statefulness": "stateful",
-            "richness": "rich",
-            "wire": format!("daman/persona/{}", cli.role),
-        },
-        // Declare the chi vocabulary this persona speaks. Subscriptions are implicit:
-        // humd routes incoming tones by chi value to bees whose hello listed that chi.
-        // We list inbound daman chis the persona reacts to plus the standard nestler set.
-        "chis": [
-            "hello", "echo", "log", "perf-mark",
-            "prompt", "chunk", "tool-call", "tool-result", "tool-meta", "finish", "error",
-            // daman chis the persona reacts to
-            "trade-claim", "slash-claim", "ruling", "bounty-claimed",
-            "credit-need", "credit-signed-request", "credit-relayed", "credit-error",
-            "loan-requested", "loan-repaid", "loan-blocked"
-        ],
-        "source": "https://github.com/damanfi/agents/tree/main/daman-personas",
-    });
+    // Emit forager hello (canonical shape via the substrate-built Hello).
+    let hello = serde_json::to_value(&forager.hello)?;
     write_line(&write_half, &hello).await?;
+    info!(tools = registry.len(), "forager hello emitted");
 
-    // Subscribe to gossip topics. Topic subscription is implicit via the chis declaration
-    // in the hello manifest above; humd routes incoming tones by chi value to bees whose
-    // hello listed that chi. There is no separate `gossip-subscribe` wire frame.
-    let _topics = persona.subscribe_topics();
-    let _chain_events = persona.subscribe_chain_events();
+    // Emit bootstrap prompt to seed the first decision.
+    let system_prompt = compose_system_prompt(role, &cli.variant, &cli.bee_name, &cli.eoa_addr);
+    let bootstrap_text = bootstrap_directive(role, &namespace);
+    let bootstrap = json!({
+        "chi": "prompt",
+        "sid": &sid,
+        "from": bee_name,
+        "modelId": "claude-opus-4-7",
+        "systemPrompt": system_prompt,
+        "text": bootstrap_text,
+        "disallowedTools": CLAUDE_BUILT_IN_BLOCKLIST,
+    });
+    write_line(&write_half, &bootstrap).await?;
+    info!(sid = %sid, "bootstrap prompt emitted");
 
-    // Bootstrap tick. Personas are event-driven, but on startup they have nothing to
-    // react to. Emit one synthetic event so the worker gets its first prompt and the
-    // persona's first decision goes on chain. The synthetic event carries
-    // `kind: bootstrap` so the worker knows this is the session-open prompt.
-    if let Some(sys_prompt) = persona.persona_system_prompt() {
-        // Per-role bootstrap directive. Tools are surfaced to claude via MCP as
-        // `mcp__hum__daman_*`. The directive must be imperative or claude tends to
-        // finish without calling anything.
-        let role_directive = match role {
-            Role::Leader => "Your first action: call mcp__hum__daman_register_leader with args {tier: 0, claimedAum: \"10000000000000000000000\", as_bee: \"<your bee_name>\"} to register as a retail-tier leader claiming 10000 USDC AUM. Do not explain; call the tool now.",
-            Role::Follower => "Your first action: call mcp__hum__daman_read_reputation for a few candidate leader addresses (you have none yet; query 0x15f8A419eEd9Dc1e21C6bb86B06be979ad80De29 as a starting probe). After you see at least one valid leader, call mcp__hum__daman_subscribe with that leader and a capital of 1000000 USDC.",
-            Role::Watchdog => "Your first action: call mcp__hum__daman_subscribe_to_role_events with args {role: \"watchdog\", as_bee: \"<your bee_name>\"} to open the event stream. Then idle until a degradation candidate appears.",
-            Role::Arbiter => "Your first action: call mcp__hum__daman_subscribe_to_role_events with args {role: \"arbiter\", as_bee: \"<your bee_name>\"} to open the event stream. Then idle until a dispute lands.",
-            Role::Relief => "Your first action: call mcp__hum__daman_subscribe_to_role_events with args {role: \"relief\", as_bee: \"<your bee_name>\"} to open the relief stream. Then idle.",
-        };
-        let user_text = format!(
-            "Bootstrap tick. {directive}\n\nWhen calling tools, set the `as_bee` arg to your bee_name (your identity in this session).",
-            directive = role_directive
-        );
-        let bootstrap = json!({
-            "chi": "prompt",
-            "sid": &sid,
-            "from": persona.bee_name(),
-            "modelId": "claude-opus-4-7",
-            "systemPrompt": sys_prompt,
-            "text": user_text,
-            "disallowedTools": disallowed_tools_value(),
-        });
-        write_line(&write_half, &bootstrap).await?;
-        tracing::info!(sid = %sid, "bootstrap prompt emitted");
-    }
-
-    // Tick loop. Asker behavior is event-driven: each inbound gossip / chain-event tone
-    // produces an Event, which we hand to persona.on_event. On Decision::Prompt, we emit
-    // chi:prompt on the persona's sid; humd routes to the claude-cli worker's cell which
-    // observes via its bound sid. The persona then logs the bloom (chunks, tool-calls,
-    // finish) as they arrive on its inbound stream.
+    // Demux loop: read humd, dispatch chi:tool-call to registry, log finish/error.
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {
         if line.trim().is_empty() {
@@ -208,71 +161,83 @@ async fn main() -> Result<()> {
         let frame: Value = match serde_json::from_str(&line) {
             Ok(v) => v,
             Err(e) => {
-                warn!(error = %e, payload = %line, "frame parse failed");
+                warn!(error = %e, "frame parse failed");
                 continue;
             }
         };
         let chi = frame.get("chi").and_then(|c| c.as_str()).unwrap_or("");
         match chi {
-            "gossip-event" | "gossip-deliver" => {
-                let topic = frame.get("topic").and_then(|t| t.as_str()).unwrap_or("");
-                let body = frame.get("payload").cloned().unwrap_or(Value::Null);
-                let event = persona_base::persona::Event::Gossip {
-                    topic: topic.into(),
-                    body,
+            "tool-call" => {
+                let call = match parse_tool_call(&frame) {
+                    Some(c) => c,
+                    None => continue,
                 };
-                handle_event(&persona, &write_half, event, &sid).await?;
-            }
-            "chain-event" => {
-                let contract = frame.get("contract").and_then(|c| c.as_str()).unwrap_or("");
-                let event_name = frame.get("event").and_then(|c| c.as_str()).unwrap_or("");
-                let data = frame.get("data").cloned().unwrap_or(Value::Null);
-                let event = persona_base::persona::Event::ChainEvent {
-                    contract: contract.into(),
-                    event: event_name.into(),
-                    data,
+                tracing::info!(tool = %call.tool_name, call_id = %call.call_id, "tool-call received");
+                let tool = match registry.lookup(&call.tool_name) {
+                    Some(t) => t,
+                    None => {
+                        warn!(tool = %call.tool_name, "unknown tool");
+                        let res = reverb_arc_fs::tools::ToolResult::fail(
+                            call.call_id,
+                            reverb_arc_fs::ForagerError::UnknownTool { tool: call.tool_name.clone() },
+                        );
+                        emit_result(&write_half, &res, &sid).await?;
+                        continue;
+                    }
                 };
-                handle_event(&persona, &write_half, event, &sid).await?;
+                let result = tool.invoke(call).await;
+                tracing::info!(ok = result.ok, "tool-result");
+                emit_result(&write_half, &result, &sid).await?;
             }
-            // Forward chunks / tool-calls / tool-results / finishes from the worker to the
-            // persona's log. The persona doesn't act on them directly; the forager (daman-
-            // arc-fs) handles tool-calls and emits tool-results back to humd.
-            "chunk" | "tool-call" | "tool-result" | "finish" | "error" => {
-                tracing::debug!(chi, "observation");
+            "finish" => {
+                let usage = frame.get("usage").cloned().unwrap_or(Value::Null);
+                let out_tokens = usage.get("output_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
+                tracing::info!(out_tokens, "finish");
             }
+            "chunk" => {
+                tracing::debug!("chunk");
+            }
+            "error" => {
+                let q = frame.get("qualifier").and_then(|v| v.as_str()).unwrap_or("");
+                let d = frame.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+                warn!(qualifier = %q, detail = %d, "error frame");
+            }
+            "session-ready" => {
+                tracing::info!("session-ready");
+            }
+            "breath" => {}
             _ => {
-                tracing::trace!(chi, "ignored frame");
+                tracing::trace!(chi, "frame");
             }
         }
     }
     Ok(())
 }
 
-async fn handle_event(
-    persona: &Box<dyn persona_base::persona::PersonaBee>,
+fn parse_tool_call(frame: &Value) -> Option<ToolCall> {
+    Some(ToolCall {
+        call_id: frame.get("callId").and_then(|v| v.as_str())?.to_string(),
+        from: frame.get("from").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        as_bee: None,
+        tool_name: frame.get("toolName").and_then(|v| v.as_str())?.to_string(),
+        args: frame.get("args").cloned().unwrap_or(Value::Null),
+    })
+}
+
+async fn emit_result(
     write_half: &Arc<tokio::sync::Mutex<tokio::net::unix::OwnedWriteHalf>>,
-    event: persona_base::persona::Event,
-    _sid: &str,
+    result: &reverb_arc_fs::tools::ToolResult,
+    sid: &str,
 ) -> Result<()> {
-    use persona_base::persona::Decision;
-    match persona.on_event(event).await {
-        Decision::Skip { reason } => {
-            tracing::debug!(reason, "persona skipped");
-        }
-        Decision::Prompt { sid, system_prompt, user_prompt } => {
-            let prompt = json!({
-                "chi": "prompt",
-                "sid": sid,
-                "from": persona.bee_name(),
-                "modelId": "claude-opus-4-7",
-                "systemPrompt": system_prompt,
-                "text": user_prompt,
-                "disallowedTools": disallowed_tools_value(),
-            });
-            write_line(write_half, &prompt).await?;
-        }
-    }
-    Ok(())
+    let payload = json!({
+        "chi": "tool-result",
+        "callId": result.call_id,
+        "sid": sid,
+        "ok": result.ok,
+        "value": result.value,
+        "error": result.error,
+    });
+    write_line(write_half, &payload).await
 }
 
 fn sock_path_default() -> String {
@@ -293,4 +258,25 @@ async fn write_line(
     let mut guard = handle.lock().await;
     guard.write_all(&bytes).await?;
     Ok(())
+}
+
+fn bootstrap_directive(role: Role, ns: &str) -> String {
+    let action = match role {
+        Role::Leader => format!(
+            "Call mcp__hum__{ns}_register_leader with args {{tier: 0, claimedAum: \"10000000000000000000000\"}} to register as a retail-tier leader claiming 10000 USDC AUM. Do not explain; call the tool now."
+        ),
+        Role::Follower => format!(
+            "Call mcp__hum__{ns}_read_reputation for a candidate leader address (start with 0x15f8A419eEd9Dc1e21C6bb86B06be979ad80De29). Then call mcp__hum__{ns}_subscribe with the leader and capital 1000000."
+        ),
+        Role::Watchdog => format!(
+            "Call mcp__hum__{ns}_subscribe_to_role_events with args {{role: \"watchdog\"}} to open the event stream. Then idle until a degradation candidate appears."
+        ),
+        Role::Arbiter => format!(
+            "Call mcp__hum__{ns}_subscribe_to_role_events with args {{role: \"arbiter\"}} to open the event stream. Then idle until a dispute lands."
+        ),
+        Role::Relief => format!(
+            "Call mcp__hum__{ns}_subscribe_to_role_events with args {{role: \"relief\"}} to open the relief stream. Then idle."
+        ),
+    };
+    format!("Bootstrap tick. {action}")
 }

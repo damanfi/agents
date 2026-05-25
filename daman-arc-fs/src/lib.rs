@@ -1,27 +1,65 @@
-//! # daman-arc-fs
+//! # daman-arc-fs (library)
 //!
-//! Daman's forager extension to `reverb-arc-fs`. Adds 17 high-level tools that compose the
-//! base `arc_*` primitives plus the Daman contract surface (DamanCopyBond,
-//! DamanBountyAccrual, DamanReputationRegistry, DamanBenevolence, UniverseRegistry, plus
-//! the substrate's RefundProtocolFixed for follower refund claims).
+//! Library crate that consumer-product persona binaries import to compose their own
+//! per-persona forager. Per BRIEF_PERSONA_AS_FORAGER + the substrate's
+//! `reverb-arc-fs::PersonaForagerBuilder`, each persona binary builds one
+//! `PersonaForager` holding exactly one EOA private key, one stable ed25519 hid,
+//! one namespaced tool surface, one humd connection. Process boundary IS identity
+//! boundary, matching humfs's per-instance `fs.roots` pattern.
 //!
-//! Persona bees emit `chi:"tool-call"` carrying a `tool_name` from this surface. humd routes
-//! by `tool_name` to this forager. The forager runs the six-stage safety pipeline (auth, ABI
-//! validation, simulation gate, rate limit, send, receipt cache) inherited from `reverb-arc-fs`,
-//! then submits via the keyring's EOA bound to the calling bee, then emits `chi:"tool-result"`
-//! back via humd's `tool_routes[callId]` reverse map.
+//! Public surface:
+//! - [`DamanAddrs`] — the deployed proxy address book on Arc testnet.
+//! - [`DamanCtx`] — per-bee config (signer + addrs + rpc) the tool factories close over.
+//! - [`daman_tools`] — factory returning `Vec<Tool>` for one persona, all 17 tools
+//!   prefixed by the persona's namespace.
+//! - [`namespace_for_bee`] — canonical bee_name → namespace mapping per the brief's
+//!   convention (alpha, fol_v1_1, wd_v1_1, arb_v1, relief1, etc.).
 //!
-//! No reasoning inside the forager. The forager is the executor. Reasoning lives in the
-//! worker bee's cell (claude-cli); the persona is the thin asker.
+//! Typical persona-binary composition:
 //!
-//! Spec: <https://reverbprotocol.github.io/protocol/OPERATING_MODEL#the-forager-hive-contract>
-//! plus the daman-side `damanfi/agents/daman-arc-fs/README.md` for the tool table.
+//! ```ignore
+//! use reverb_arc_fs::{PersonaForagerBuilder, BeeIdentity, BeeRole, PrivateKey};
+//! use alloy::signers::local::PrivateKeySigner;
+//! use std::str::FromStr;
+//! use daman_arc_fs::{daman_tools, namespace_for_bee, DamanAddrs, DamanCtx};
+//!
+//! let bee_name = "daman-leader-alpha";
+//! let ns = namespace_for_bee(bee_name);
+//! let key_bytes = std::fs::read_to_string("/path/to/key").unwrap();
+//! let signer = PrivateKeySigner::from_str(key_bytes.trim()).unwrap();
+//! let pk = PrivateKey::new(format!("0x{}", key_bytes.trim())).unwrap();
+//! let identity = BeeIdentity::load_or_mint_with_role(bee_name, BeeRole::Forager).unwrap();
+//! let addrs = DamanAddrs::default();
+//!
+//! let ctx = DamanCtx::new(
+//!     bee_name,
+//!     "https://rpc.testnet.arc.network",
+//!     5042002,
+//!     addrs.clone(),
+//!     signer,
+//! );
+//! let tools = daman_tools(ctx, &ns);
+//!
+//! let forager = PersonaForagerBuilder::default()
+//!     .bee_name(bee_name)
+//!     .namespace(ns)
+//!     .identity(identity)
+//!     .private_key(pk)
+//!     .with_tools(tools)
+//!     .allowed_contracts(addrs.allowlist())
+//!     .wire("daman/arc-fs")
+//!     .build()
+//!     .unwrap();
+//! ```
+//!
+//! Spec: <https://reverbprotocol.github.io/protocol/OPERATING_MODEL>
+//! Hum hives contract: <https://adiled.github.io/hum/hives/>
 
-pub mod hello;
-pub mod tools;
-pub mod tools_defs;
-pub mod handler;
+pub mod addrs;
+pub mod contracts;
+pub mod factories;
+pub mod namespacing;
 
-pub use hello::build_hello;
-pub use handler::Handler;
-pub use tools::DamanAddrs;
+pub use addrs::DamanAddrs;
+pub use factories::{daman_tools, DamanCtx};
+pub use namespacing::namespace_for_bee;

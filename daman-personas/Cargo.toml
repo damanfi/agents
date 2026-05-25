@@ -3,7 +3,7 @@ name = "daman-personas"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Daman persona bees. Five role implementations (leader, follower, watchdog, arbiter, relief) each consuming persona-base from the substrate. A persona is a thin asker: subscribes to gossip + chain events, assembles world state, prompts the local claude-cli worker on its sid, logs the bloom. Variant overlays parametrize the system prompt per persona instance."
+description = "Daman persona binaries. Each persona is its own self-contained forager process: one EOA private key, one stable ed25519 hid, one namespaced tool surface, one humd connection. Composes reverb-arc-fs::PersonaForagerBuilder with daman-arc-fs::daman_tools and the persona's role-overlay system prompt into a single binary. Per BRIEF_PERSONA_AS_FORAGER + the substrate operating model standard."
 
 [dependencies]
 tokio = { workspace = true }
@@ -16,12 +16,23 @@ parking_lot = { workspace = true }
 uuid = { workspace = true }
 hex = { workspace = true }
 libc = { workspace = true }
-reqwest = { workspace = true }
 async-trait = "0.1"
 thiserror = "1"
 clap = { version = "4", features = ["derive", "env"] }
+reverb-arc-fs = { git = "https://github.com/reverbprotocol/protocol", branch = "main" }
 persona-base = { git = "https://github.com/reverbprotocol/protocol", branch = "main" }
-daman-credit-policy = { path = "../daman-credit-policy" }
+daman-arc-fs = { path = "../daman-arc-fs" }
+alloy = { version = "0.8", default-features = false, features = [
+    "providers",
+    "transport-http",
+    "rpc-types-eth",
+    "signers",
+    "signer-local",
+    "contract",
+    "sol-types",
+    "network",
+    "reqwest-rustls-tls",
+] }
 
 [lib]
 path = "src/lib.rs"
