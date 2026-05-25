@@ -96,35 +96,56 @@ async fn main() -> Result<()> {
             "richness": "rich",
             "wire": format!("daman/persona/{}", cli.role),
         },
-        "chis": ["hello", "echo", "log", "perf-mark", "prompt", "chunk", "tool-call", "tool-result", "finish", "gossip-subscribe"],
+        // Declare the chi vocabulary this persona speaks. Subscriptions are implicit:
+        // humd routes incoming tones by chi value to bees whose hello listed that chi.
+        // We list inbound daman chis the persona reacts to plus the standard nestler set.
+        "chis": [
+            "hello", "echo", "log", "perf-mark",
+            "prompt", "chunk", "tool-call", "tool-result", "tool-meta", "finish", "error",
+            // daman chis the persona reacts to
+            "trade-claim", "slash-claim", "ruling", "bounty-claimed",
+            "credit-need", "credit-signed-request", "credit-relayed", "credit-error",
+            "loan-requested", "loan-repaid", "loan-blocked"
+        ],
         "source": "https://github.com/damanfi/agents/tree/main/daman-personas",
     });
     write_line(&write_half, &hello).await?;
 
-    // Subscribe to gossip topics.
-    for topic in persona.subscribe_topics() {
-        let sub = json!({ "chi": "gossip-subscribe", "topic": topic });
-        write_line(&write_half, &sub).await?;
-    }
+    // Subscribe to gossip topics. Topic subscription is implicit via the chis declaration
+    // in the hello manifest above; humd routes incoming tones by chi value to bees whose
+    // hello listed that chi. There is no separate `gossip-subscribe` wire frame.
+    let _topics = persona.subscribe_topics();
+    let _chain_events = persona.subscribe_chain_events();
 
-    // Chain-event subscription is handled via a separate forager in the operating model;
-    // declare intent here for the runtime to pick up (this persona binary leaves the
-    // chain-stream attachment to humd's chain-reader forager + bridge).
-    for filter in persona.subscribe_chain_events() {
-        let req = json!({
-            "chi": "gossip-publish",
-            "topic": "daman/chain-stream/request",
-            "payload": {
-                "chi": "subscribe-chain-event",
-                "args": {
-                    "contract": filter.contract,
-                    "event_signature": filter.event_signature,
-                    "from_block": filter.from_block,
-                    "subscriber": persona.bee_name(),
-                }
-            }
+    // Bootstrap tick. Personas are event-driven, but on startup they have nothing to
+    // react to. Emit one synthetic event so the worker gets its first prompt and the
+    // persona's first decision goes on chain. The synthetic event carries
+    // `kind: bootstrap` so the worker knows this is the session-open prompt.
+    if let Some(sys_prompt) = persona.persona_system_prompt() {
+        // Per-role bootstrap directive. Tools are surfaced to claude via MCP as
+        // `mcp__hum__daman_*`. The directive must be imperative or claude tends to
+        // finish without calling anything.
+        let role_directive = match role {
+            Role::Leader => "Your first action: call mcp__hum__daman_register_leader with args {tier: 0, claimedAum: \"10000000000000000000000\", as_bee: \"<your bee_name>\"} to register as a retail-tier leader claiming 10000 USDC AUM. Do not explain; call the tool now.",
+            Role::Follower => "Your first action: call mcp__hum__daman_read_reputation for a few candidate leader addresses (you have none yet; query 0x15f8A419eEd9Dc1e21C6bb86B06be979ad80De29 as a starting probe). After you see at least one valid leader, call mcp__hum__daman_subscribe with that leader and a capital of 1000000 USDC.",
+            Role::Watchdog => "Your first action: call mcp__hum__daman_subscribe_to_role_events with args {role: \"watchdog\", as_bee: \"<your bee_name>\"} to open the event stream. Then idle until a degradation candidate appears.",
+            Role::Arbiter => "Your first action: call mcp__hum__daman_subscribe_to_role_events with args {role: \"arbiter\", as_bee: \"<your bee_name>\"} to open the event stream. Then idle until a dispute lands.",
+            Role::Relief => "Your first action: call mcp__hum__daman_subscribe_to_role_events with args {role: \"relief\", as_bee: \"<your bee_name>\"} to open the relief stream. Then idle.",
+        };
+        let user_text = format!(
+            "Bootstrap tick. {directive}\n\nWhen calling tools, set the `as_bee` arg to your bee_name (your identity in this session).",
+            directive = role_directive
+        );
+        let bootstrap = json!({
+            "chi": "prompt",
+            "sid": &sid,
+            "from": persona.bee_name(),
+            "modelId": "claude-opus-4-7",
+            "systemPrompt": sys_prompt,
+            "text": user_text,
         });
-        write_line(&write_half, &req).await?;
+        write_line(&write_half, &bootstrap).await?;
+        tracing::info!(sid = %sid, "bootstrap prompt emitted");
     }
 
     // Tick loop. Asker behavior is event-driven: each inbound gossip / chain-event tone
@@ -196,8 +217,9 @@ async fn handle_event(
                 "chi": "prompt",
                 "sid": sid,
                 "from": persona.bee_name(),
+                "modelId": "claude-opus-4-7",
                 "systemPrompt": system_prompt,
-                "userPrompt": user_prompt,
+                "text": user_prompt,
             });
             write_line(write_half, &prompt).await?;
         }

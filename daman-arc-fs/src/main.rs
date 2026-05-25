@@ -65,9 +65,43 @@ async fn main() -> Result<()> {
     let (read_half, write_half) = stream.into_split();
     let write_half = Arc::new(tokio::sync::Mutex::new(write_half));
 
-    let hello = build_hello(BEE_VERSION);
-    write_line(&write_half, &serde_json::to_value(&hello)?).await?;
-    info!("hello emitted: {} tools, {} chis", hello.tools.len(), hello.chis.len());
+    // Emit canonical forager hello. humd routes tool-calls by tool_name to bees whose
+    // hello declared `bee: ["forager"]`; the substrate's `Hello::base()` puts the bee
+    // name in the `bee` field which doesn't match humd's routing predicate, so we build
+    // the on-wire envelope by hand here matching the shape in hum/hives/common/src/forager.rs.
+    let tools_value: Vec<Value> = daman_arc_fs::tools::catalog()
+        .iter()
+        .map(|t| serde_json::json!({
+            "name": t.name,
+            "description": format!("Daman tool: {}", t.name),
+            "inputSchema": {"type": "object", "additionalProperties": true},
+        }))
+        .collect();
+    let tool_names: Vec<&str> = daman_arc_fs::tools::catalog().iter().map(|t| t.name).collect();
+    let hid_hex = format!("{:0>64}", "daman-arc-fs-stub-hid");
+    let hello_envelope = serde_json::json!({
+        "chi": "hello",
+        "bee": ["forager"],
+        "hid": &hid_hex,
+        "from": &hid_hex,
+        "hive": BEE_NAME,
+        "version": BEE_VERSION,
+        "protoVersion": "0.7.0",
+        "tools": tools_value,
+        "toolNames": tool_names,
+        "provides": ["daman"],
+        "chis": ["hello", "tool-call", "tool-result", "cancel", "breath", "echo", "gossip-publish"],
+        "source": "https://github.com/damanfi/agents/tree/main/daman-arc-fs",
+        "propensity": {
+            "statefulness": "stateful",
+            "richness": "rich",
+            "wire": "daman/arc-fs",
+        }
+    });
+    write_line(&write_half, &hello_envelope).await?;
+    info!("hello emitted: {} tools as forager hive `{}`", tool_names.len(), BEE_NAME);
+    // legacy build_hello call retained but unused now
+    let _ = build_hello(BEE_VERSION);
 
     let mut reader = BufReader::new(read_half).lines();
     while let Some(line) = reader.next_line().await? {
