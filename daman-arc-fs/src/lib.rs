@@ -19,6 +19,7 @@
 
 pub mod hello;
 pub mod tools;
+pub mod tools_defs;
 pub mod handler;
 
 pub use hello::build_hello;

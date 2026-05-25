@@ -105,6 +105,28 @@ Bees that need the credit primitive add `daman-credit-policy = { path = "../dama
 
 Repayments are 1:1 (zero interest). The contract binds debt to the signer's address regardless of who submits on chain, so the relief-bee relay path carries no on-chain liability for the relayer. The `daman-relief` crate carries the relayer implementation; spawn 2-3 pre-funded relief instances ($1 USDC each, enough for ~1000 relay submissions at Arc gas prices) at swarm start.
 
+## Security model: process boundary = identity boundary
+
+Each persona is its own self-contained forager process. Each persona owns one EOA private key. There is no shared multi-tenant signer; the `daman-arc-fs` crate is a library that the persona binary composes against `persona-base::AskerLoop` to form a single forager process per bee.
+
+The pattern mirrors humfs from the hum docs: "each humfs forager owns its `fs.roots` snapshot, read from its local hum.json at boot." For us the analogue is: each persona forager owns its single EOA, read from its local keyfile at boot. Tool calls that would transact on behalf of any other address are structurally impossible because the forager only holds one key.
+
+Key storage:
+
+- `~/.config/hum/daman-personas/<bee_name>.key` — one 64-char hex file per persona, no `0x` prefix, no trailing newline, mode 0600.
+- The directory is mode 0700.
+- The persona binary reads its own keyfile at boot (path via `--key-path`).
+- `scripts/mint-persona-keys.sh` provisions one keyfile per bee, optionally deterministic via `BEE_SEED_<bee_upper>` env values.
+- `scripts/launch-swarm.sh` derives the address per bee with `cast wallet address` and passes both `--eoa-addr` and `--key-path` to the spawned process.
+
+Tool namespacing:
+
+- Each persona advertises only its own tools, namespaced by a short form of its bee_name (`alpha_register_leader`, `wd_v1_1_file_claim`, etc.).
+- humd routes each `chi:tool-call` uniquely to the forager that advertised it. claude in each persona's sid sees only its own namespaced tools.
+- No `as_bee` argument. No multi-tenant auth check. The forager signs with the only key it holds.
+
+Blast radius: compromise of a single keyfile compromises exactly one bee's wallet. Compromise of the whole `daman-personas/` directory compromises 27 wallets, the same as the old single-keyring approach, but the per-file model lets the operator rotate keys per-bee without touching others, and per-process isolation prevents a memory leak in one persona from leaking another's key.
+
 ## License
 
 Apache-2.0.

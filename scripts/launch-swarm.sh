@@ -11,13 +11,15 @@
 # Use `--smoke` to spawn just the 4-persona smoke subset (1 leader + 1 follower +
 # 1 watchdog + 1 arbiter) per the brief's pre-scale gate.
 #
-# Per-persona keyring entries are loaded by daman-arc-fs at boot from
-# ~/.config/hum/daman-arc-fs/keyring.json. This launcher does NOT mint EOAs; that lives
-# in scripts/mint-persona-keys.sh which the operator runs once.
+# Per BRIEF_PERSONA_AS_FORAGER, each persona is its own self-contained forager
+# process and owns its single EOA private key. There is no shared keyring; the
+# launcher passes --key-path to each spawned persona, pointing at its own keyfile
+# under ~/.config/hum/daman-personas/<bee_name>.key. Process boundary IS identity
+# boundary. Mirrors humfs's per-instance fs.roots scoping pattern.
 #
 # Required env (sourced from ~/.config/hum/daman-swarm.env or process env):
 #   HUM_THRUM_SOCK         humd's NDJSON socket
-#   DAMAN_ARC_FS_KEYRING   keyring path (default ~/.config/hum/daman-arc-fs/keyring.json)
+#   DAMAN_PERSONA_KEY_DIR  per-bee keyfile dir (default ~/.config/hum/daman-personas)
 #   DAMAN_PERSONA_LOG_ROOT log root dir; per-bee subdirs created (default ./logs)
 #
 # Spawns persona processes with `&`. For production use pm2 or systemd; see
@@ -27,42 +29,27 @@ set -euo pipefail
 
 MODE="${1:-full}"
 LOG_ROOT="${DAMAN_PERSONA_LOG_ROOT:-./logs}"
-KEYRING="${DAMAN_ARC_FS_KEYRING:-$HOME/.config/hum/daman-arc-fs/keyring.json}"
+KEY_DIR="${DAMAN_PERSONA_KEY_DIR:-$HOME/.config/hum/daman-personas}"
 
 mkdir -p "$LOG_ROOT"
 
-if [[ ! -r "$KEYRING" ]]; then
-  echo "error: keyring not readable at $KEYRING" >&2
+if [[ ! -d "$KEY_DIR" ]]; then
+  echo "error: keyfile dir not found at $KEY_DIR" >&2
   echo "       run scripts/mint-persona-keys.sh first" >&2
   exit 2
 fi
-
-# Read EOA for each bee from the keyring (which is { "bee_name": "0x<priv>" }).
-# We need the address per bee for the system prompt. derive_addr_from_key() uses cast.
-# Operator can override via DAMAN_PERSONA_ADDR_<bee_name_uppercase_with_underscores> env.
-
-derive_addr_from_key() {
-  local bee="$1"
-  # Allow direct override.
-  local env_var="DAMAN_PERSONA_ADDR_$(echo "$bee" | tr '[:lower:]-' '[:upper:]_')"
-  local override="${!env_var:-}"
-  if [[ -n "$override" ]]; then echo "$override"; return; fi
-
-  local key
-  key=$(jq -r --arg b "$bee" '.[$b] // empty' "$KEYRING")
-  if [[ -z "$key" ]]; then
-    echo "error: no keyring entry for bee `$bee`" >&2
-    exit 2
-  fi
-  cast wallet address --private-key "$key"
-}
 
 spawn_one() {
   local role="$1"
   local variant="$2"
   local bee_name="$3"
+  local keyfile="$KEY_DIR/${bee_name}.key"
+  if [[ ! -r "$keyfile" ]]; then
+    echo "error: no keyfile for $bee_name at $keyfile" >&2
+    return 1
+  fi
   local addr
-  addr=$(derive_addr_from_key "$bee_name")
+  addr=$(cast wallet address --private-key "0x$(cat "$keyfile")")
   local logdir="$LOG_ROOT/$bee_name"
   mkdir -p "$logdir"
   echo "spawning $bee_name (role=$role variant=$variant addr=$addr)"
@@ -72,6 +59,7 @@ spawn_one() {
       --variant "$variant" \
       --bee-name "$bee_name" \
       --eoa-addr "$addr" \
+      --key-path "$keyfile" \
       --log-dir "$logdir" \
       > "$logdir/stdout.log" 2> "$logdir/stderr.log" &
 }

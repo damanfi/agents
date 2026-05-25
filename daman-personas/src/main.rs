@@ -20,6 +20,52 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 use tracing::{info, warn};
 
+/// Claude Code's built-in tool surface that this swarm doesn't want claude to invoke.
+/// Per hum maintainers: humd only auto-removes built-ins that map to a capability a
+/// forager `provides` for; only `fs` is mapped today, so everything else rides through
+/// on top of our 17 daman_* tools unless we explicitly disallow per-turn.
+///
+/// disallowedTools is per-turn, not sticky on the session, so every chi:"prompt" tone
+/// must carry it.
+///
+/// The first block is the maintainer-suggested set. The second block captures every
+/// additional Claude Code built-in observed in a session-ready tools listing that has
+/// no role in the swarm: cron scheduling, worktree management, push notifications,
+/// the internal Task todo list, etc. Anything left out of this list rides through.
+const CLAUDE_BUILT_IN_BLOCKLIST: &[&str] = &[
+    // shell
+    "Bash", "BashOutput", "KillShell",
+    // filesystem
+    "Read", "Edit", "Write", "MultiEdit", "NotebookEdit",
+    // search
+    "Glob", "Grep",
+    // network
+    "WebFetch", "WebSearch",
+    // task / planning / chat
+    "Task", "TodoWrite", "AskUserQuestion", "ExitPlanMode", "SlashCommand",
+    // observed-but-irrelevant: cron + scheduling
+    "CronCreate", "CronDelete", "CronList", "ScheduleWakeup",
+    // worktree management
+    "EnterPlanMode", "EnterWorktree", "ExitWorktree",
+    // notifications / monitors / skills
+    "Monitor", "PushNotification", "Skill",
+    // internal Task todo list
+    "TaskCreate", "TaskGet", "TaskList", "TaskOutput", "TaskUpdate", "TaskStop",
+    // tool-search meta-tool (already shouldn't appear, but defensive)
+    "ToolSearch",
+    // remote trigger / share / cli setup helpers
+    "RemoteTrigger", "ShareOnboardingGuide",
+];
+
+fn disallowed_tools_value() -> Value {
+    Value::Array(
+        CLAUDE_BUILT_IN_BLOCKLIST
+            .iter()
+            .map(|s| Value::String((*s).to_string()))
+            .collect(),
+    )
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "daman-persona", about = "Daman persona bee runtime")]
 struct Cli {
@@ -143,6 +189,7 @@ async fn main() -> Result<()> {
             "modelId": "claude-opus-4-7",
             "systemPrompt": sys_prompt,
             "text": user_text,
+            "disallowedTools": disallowed_tools_value(),
         });
         write_line(&write_half, &bootstrap).await?;
         tracing::info!(sid = %sid, "bootstrap prompt emitted");
@@ -220,6 +267,7 @@ async fn handle_event(
                 "modelId": "claude-opus-4-7",
                 "systemPrompt": system_prompt,
                 "text": user_prompt,
+                "disallowedTools": disallowed_tools_value(),
             });
             write_line(write_half, &prompt).await?;
         }

@@ -65,19 +65,12 @@ async fn main() -> Result<()> {
     let (read_half, write_half) = stream.into_split();
     let write_half = Arc::new(tokio::sync::Mutex::new(write_half));
 
-    // Emit canonical forager hello. humd routes tool-calls by tool_name to bees whose
-    // hello declared `bee: ["forager"]`; the substrate's `Hello::base()` puts the bee
-    // name in the `bee` field which doesn't match humd's routing predicate, so we build
-    // the on-wire envelope by hand here matching the shape in hum/hives/common/src/forager.rs.
-    let tools_value: Vec<Value> = daman_arc_fs::tools::catalog()
-        .iter()
-        .map(|t| serde_json::json!({
-            "name": t.name,
-            "description": format!("Daman tool: {}", t.name),
-            "inputSchema": {"type": "object", "additionalProperties": true},
-        }))
-        .collect();
-    let tool_names: Vec<&str> = daman_arc_fs::tools::catalog().iter().map(|t| t.name).collect();
+    // Emit canonical forager hello with proper tool defs (name + description + inputSchema)
+    // so claude knows when + how to call each tool. Mirrors hum/hives/humfs/src/tools/read.rs
+    // pattern. Empty schemas (additionalProperties: true) cause claude to skip the tool
+    // because it can't construct args confidently.
+    let tools_value = daman_arc_fs::tools_defs::tools_array();
+    let tool_names = daman_arc_fs::tools_defs::tool_names();
     let hid_hex = format!("{:0>64}", "daman-arc-fs-stub-hid");
     let hello_envelope = serde_json::json!({
         "chi": "hello",
@@ -100,7 +93,6 @@ async fn main() -> Result<()> {
     });
     write_line(&write_half, &hello_envelope).await?;
     info!("hello emitted: {} tools as forager hive `{}`", tool_names.len(), BEE_NAME);
-    // legacy build_hello call retained but unused now
     let _ = build_hello(BEE_VERSION);
 
     let mut reader = BufReader::new(read_half).lines();

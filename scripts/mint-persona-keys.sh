@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
-# mint-persona-keys.sh — mint EOAs for the 27 personas and write daman-arc-fs's keyring.
+# mint-persona-keys.sh — mint EOAs for the 27 personas as per-persona keyfiles.
 #
-# Run once before launch-swarm.sh. Idempotent: re-running regenerates fresh keys for any
-# persona not already in the keyring; pass --force to regenerate all.
+# Per BRIEF_PERSONA_AS_FORAGER, each persona is its own forager process and owns its
+# single EOA private key. There is no shared keyring; process boundary = identity
+# boundary. Mirrors the humfs `fs.roots` per-instance scoping pattern from
+# https://adiled.github.io/hum/hives/humfs : "Each humfs forager owns its fs.roots
+# snapshot, read from its local hum.json at boot."
 #
-# Output: ~/.config/hum/daman-arc-fs/keyring.json with 0600 permissions.
+# Run once before launch-swarm.sh. Idempotent: re-running keeps existing keyfiles
+# untouched; pass --force to regenerate all.
 #
-# Each persona's EOA is derived deterministically from BEE_SEED env values when set, so
-# the operator can pin per-persona identities. When BEE_SEED_<bee_name_upper> is unset,
-# a fresh random key is minted via `cast wallet new`.
+# Output: ~/.config/hum/daman-personas/<bee_name>.key — one 64-char hex file per
+# persona, no `0x` prefix, no newline, mode 0600. The persona binary reads this at
+# boot and uses it as its only on-chain identity.
+#
+# Each persona's EOA is derived deterministically from BEE_SEED_<bee_name_upper> when
+# set, so the operator can pin per-persona identities. When the seed is unset, a
+# fresh random key is minted via `cast wallet new`.
 
 set -euo pipefail
 
@@ -17,22 +25,17 @@ if [[ "${1:-}" == "--force" ]]; then
   FORCE=1
 fi
 
-KEYRING_DIR="$HOME/.config/hum/daman-arc-fs"
-KEYRING="$KEYRING_DIR/keyring.json"
-mkdir -p "$KEYRING_DIR"
-chmod 700 "$KEYRING_DIR"
-
-if [[ ! -f "$KEYRING" ]]; then
-  echo "{}" > "$KEYRING"
-fi
-chmod 600 "$KEYRING"
+KEY_DIR="$HOME/.config/hum/daman-personas"
+mkdir -p "$KEY_DIR"
+chmod 700 "$KEY_DIR"
 
 mint_one() {
   local bee="$1"
-  local existing
-  existing=$(jq -r --arg b "$bee" '.[$b] // empty' "$KEYRING")
-  if [[ -n "$existing" && $FORCE -eq 0 ]]; then
-    echo "$bee: existing key kept"
+  local keyfile="$KEY_DIR/${bee}.key"
+  if [[ -f "$keyfile" && $FORCE -eq 0 ]]; then
+    local addr
+    addr=$(cast wallet address --private-key "0x$(cat "$keyfile")")
+    echo "$bee: $addr (existing)"
     return
   fi
 
@@ -41,18 +44,15 @@ mint_one() {
   local key
   if [[ -n "$seed" ]]; then
     # Deterministic via keccak256(seed). Operator-supplied seed entropy.
-    key="0x$(printf '%s' "$seed" | cast keccak | sed 's/^0x//')"
+    key=$(printf '%s' "$seed" | cast keccak | sed 's/^0x//')
   else
-    key=$(cast wallet new --json | jq -r '.[0].private_key')
+    key=$(cast wallet new --json | jq -r '.[0].private_key' | sed 's/^0x//')
   fi
+  printf '%s' "$key" > "$keyfile"
+  chmod 600 "$keyfile"
   local addr
-  addr=$(cast wallet address --private-key "$key")
-  echo "$bee: $addr"
-  local tmp
-  tmp=$(mktemp)
-  jq --arg b "$bee" --arg k "$key" '. + {($b): $k}' "$KEYRING" > "$tmp"
-  mv "$tmp" "$KEYRING"
-  chmod 600 "$KEYRING"
+  addr=$(cast wallet address --private-key "0x$key")
+  echo "$bee: $addr ($keyfile)"
 }
 
 bees=(
@@ -82,5 +82,5 @@ for bee in "${bees[@]}"; do
 done
 
 echo ""
-echo "keyring at $KEYRING (mode 600)"
+echo "keyfiles at $KEY_DIR (mode 600 each)"
 echo "next: scripts/launch-swarm.sh [--smoke|full]"
