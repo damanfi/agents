@@ -93,7 +93,7 @@ install_one() {
   DAMAN_PERSONA_ROLE="$role" \
   DAMAN_PERSONA_VARIANT="$variant" \
   DAMAN_PERSONA_KEY_PATH="$keyfile" \
-    "$INSTALL_SCRIPT"
+    hum hive "$PERSONA_HIVE_DIR" install
 }
 
 uninstall_one() {

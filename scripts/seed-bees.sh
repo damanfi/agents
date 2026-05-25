@@ -23,7 +23,7 @@ set -euo pipefail
 KEY_DIR="${KEY_DIR:-$HOME/.config/hum/daman-personas}"
 USDC="${USDC:-0x3600000000000000000000000000000000000000}"
 RPC="${RPC:-https://rpc.testnet.arc.network}"
-AMOUNT="${AMOUNT:-500000}"
+AMOUNT="${AMOUNT:-3000000}"
 
 if [ -z "${DEPLOYER_PRIVATE_KEY:-}" ]; then
   ENVFILE="$HOME/damanfi/copy-bond/.env"

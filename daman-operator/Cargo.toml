@@ -1,0 +1,43 @@
+[package]
+name = "daman-operator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Daman operator binary. One process holds the deployer EOA and serves the two msg.sender-gated entry points on DamanCopyBond (recordTrade as oracle, arbiterRule as arbiterAddr). Per /tmp/audit/operator_persona.md + auth_ops.md (Path B): no on-chain rotation, the deployer key plays both roles in-process. Single bee, narrow tool surface, no variant overlay."
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+parking_lot = { workspace = true }
+uuid = { workspace = true }
+hex = { workspace = true }
+libc = { workspace = true }
+reqwest = { workspace = true }
+async-trait = "0.1"
+thiserror = "1"
+clap = { version = "4", features = ["derive", "env"] }
+reverb-arc-fs = { git = "https://github.com/reverbprotocol/protocol", branch = "main" }
+persona-base = { git = "https://github.com/reverbprotocol/protocol", branch = "main" }
+daman-arc-fs = { path = "../daman-arc-fs" }
+alloy = { version = "0.8", default-features = false, features = [
+    "providers",
+    "transport-http",
+    "rpc-types-eth",
+    "signers",
+    "signer-local",
+    "contract",
+    "sol-types",
+    "network",
+    "reqwest-rustls-tls",
+] }
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "daman-operator"
+path = "src/main.rs"

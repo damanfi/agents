@@ -20,7 +20,7 @@ pub mod personas;
 pub use personas::{
     ArbiterPersona, FollowerPersona, LeaderPersona, ReliefPersona, WatchdogPersona,
 };
-pub use variant::{role_base_prompt, variant_overlay, Role};
+pub use variant::{friendly_handle, role_persona, variant_overlay, Role};
 
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

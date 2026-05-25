@@ -59,12 +59,8 @@ fi
 . "$SVC"
 
 build() {
-  if [ -x "$BIN" ]; then
-    log "binary present: $BIN (skipping cargo)"
-    return 0
-  fi
-  command -v cargo >/dev/null 2>&1 || fail "no $BIN and cargo unavailable"
-  log "building $BIN_NAME"
+  command -v cargo >/dev/null 2>&1 || fail "cargo unavailable, can't build $BIN_NAME"
+  log "building $BIN_NAME (cargo will re-use incremental cache on subsequent installs)"
   ( cd "$WORKSPACE_ROOT" && cargo install --quiet --locked --path "$HIVE_DIR" --root "$HOME/.local" --force --bin "$BIN_NAME" )
   [ -x "$BIN" ] || fail "binary missing after build: $BIN"
   log "built: $BIN"
